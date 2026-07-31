@@ -139,7 +139,7 @@ and are marked "absent on test host" rather than counted as wins for anybody. Th
 is proven by the mount table above — a read-only bind mount of `/sys/class` necessarily exposes
 `/sys/class/dmi` on a machine that has one. The *values* were not measurable here, and this
 document does not pretend otherwise. Someone with a physical laptop can close that gap in five
-minutes; see [`METHODOLOGY.md`](METHODOLOGY.md) and please open an issue with the output.
+minutes; please open an issue with the output.
 
 Obsidian Mirror generates a per-host manifest at install time and masks or spoofs each of these
 individually, with a fail-closed sweep that tmpfs-masks any `/sys/class/*` subsystem the

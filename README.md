@@ -92,7 +92,7 @@ obsidian --test        # show what is protected vs leaked
 obsidian --audit       # full protected / leaked / not-protected report
 ```
 
-See [`docs/COVERAGE.md`](docs/COVERAGE.md) for exactly what is covered and what is *honestly* not, and [`docs/METHODOLOGY.md`](docs/METHODOLOGY.md) for how every number above was produced (and can be reproduced or disproven).
+See [`docs/COVERAGE.md`](docs/COVERAGE.md) for exactly what is covered and what is *honestly* not, and how every number above was produced (reproducible from `evidence/` by `compare.py`).
 
 ---
 
@@ -100,7 +100,7 @@ See [`docs/COVERAGE.md`](docs/COVERAGE.md) for exactly what is covered and what 
 
 - **This is not anonymity.** It reduces *device* fingerprinting by local apps. It does not hide your traffic, your accounts, or your behavior. Use it **with** a VPN/Tor, not instead of one.
 - **VPN / Tor are still necessary.** They stop your ISP and the local network from reading your traffic and hide your origin from servers. Obsidian Mirror is the layer they *don't* provide.
-- **The DMI/TPM/EDID/battery gap.** This was measured on a headless VM with no DMI table, TPM, battery, or GPU, so those identifiers read `(none)` on all four environments and are excluded from the counts (see [`docs/METHODOLOGY.md` §5](docs/METHODOLOGY.md#5-what-this-machine-could-not-test)). The probe already measures those keys; we just need someone with real hardware to run it. **PRs welcome** — if you contribute probe data, redact `id.machine_id` / `dmi.*` / `net.mac_addresses` / `bt.addresses` / `net.resolv_conf` first (GitHub issues are public).
+- **The DMI/TPM/EDID/battery gap.** This was measured on a headless VM with no DMI table, TPM, battery, or GPU, so those identifiers read `(none)` on all four environments and are excluded from the counts. The probe already measures those keys; we just need someone with real hardware to run it. **PRs welcome** — if you contribute probe data, redact `id.machine_id` / `dmi.*` / `net.mac_addresses` / `bt.addresses` / `net.resolv_conf` first (GitHub issues are public).
 - **Network layer is out of scope by design.** No traffic routing, no IP hiding.
 
 ---
@@ -109,7 +109,6 @@ See [`docs/COVERAGE.md`](docs/COVERAGE.md) for exactly what is covered and what 
 
 - The deep dive on *why* VPN/Tor/Tor Browser don't close this vector, with the full fair comparison: [`docs/METADATA-VS-POPULAR-PRIVACY-TOOLS.md`](docs/METADATA-VS-POPULAR-PRIVACY-TOOLS.md)
 - The measured Flatpak ledger: [`docs/FLATPAK-COMPARISON.md`](docs/FLATPAK-COMPARISON.md)
-- How it was measured: [`docs/METHODOLOGY.md`](docs/METHODOLOGY.md)
 - Coverage & limits: [`docs/COVERAGE.md`](docs/COVERAGE.md)
 - Raw data + the probe + the analysis: [`evidence/`](evidence/)
 

@@ -2,6 +2,8 @@
 
 ### Real Metadata Privacy protection against application metadata-leaks
 
+*This project is presented from the **application-metadata-leak** perspective: why the privacy tools people actually trust — **VPN, Tor, Tor Browser** — do **not** protect your device's identity, and what does. The Flatpak comparison further below is the concrete measurement that proves the mechanism; it is no longer the lead story.*
+
 > *"We kill people based on metadata."* — Gen. Michael Hayden, former director of **both** the NSA and the CIA, at a Johns Hopkins debate (2014) [1]
 
 Most people who care about privacy buy a **VPN**, open **Tor**, or use the **Tor Browser** and feel protected. They are not — at least not against the attack vector this project is about.

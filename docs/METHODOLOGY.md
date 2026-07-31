@@ -163,12 +163,26 @@ read-only bind mount of `/sys/class` necessarily exposes `/sys/class/dmi` on a m
 one. That is an inference from a measured fact, and it is flagged as an inference every time it
 is used.
 
+**No code change is needed to measure them.** The probe already emits the relevant keys — the full `dmi.*` set (`product_uuid`, `product_serial`, `board_serial`, `chassis_serial`, …), `gpu.drm_*`, `gpu.edid_bytes`, `gpu.dri_*`, `tpm.*` and `thermal.*` — so the moment someone runs it on real hardware, `compare.py` counts those identifiers automatically. (One honest gap remains in the *probe* itself: there is no dedicated `battery.*` key yet, because this VM has no battery to model one from; adding one is a small, welcome patch.)
+
+**What we expect, and why (from the already-measured mechanism):**
+
+| Identifier | Flatpak (predicted) | Obsidian Mirror (predicted) | Why |
+|---|---|---|---|
+| `dmi.product_uuid` / `board_serial` / `chassis_serial` | identical to host (leak) | masked / `(none)` | Flatpak bind-mounts the host `sysfs`, so `/sys/class/dmi/id` is the real hardware; Obsidian empties those paths |
+| `gpu.drm_*` / `gpu.edid_bytes` (monitor EDID) | identical to host (leak) | masked | same `sysfs` passthrough vs Obsidian's synthetic DRM view |
+| `tpm.*` | identical to host (leak) | hidden | TPM is a `sysfs` node, passed through by Flatpak |
+| `thermal.*` | identical to host (leak) | masked | `sysfs` passthrough vs synthetic |
+
+These are *predictions from a proven mechanism*, not measurements — they are marked as such on purpose. The mount table that forces them is in `evidence/flatpak-sandbox-mountinfo.txt`.
+
+**Reproducibility check (2026-07-31):** the host probe was re-run standalone on this VM; it emitted all 166 keys and `/etc/machine-id` was byte-identical to the committed `probe-host.tsv` (`67549745dd1a4564be928e47dca271fd`). The §3 commands are valid and reproducible.
+
+
 ### This is the single most useful contribution anyone can make
 
-If you have a **physical laptop or desktop** — DMI table, TPM, battery, real GPU, real disk —
-running the ten commands above takes five minutes and closes the largest evidentiary gap in
-this repository. Please open an issue with your four TSVs attached, whichever way the result
-goes.
+If you have a **physical laptop or desktop** — DMI table, TPM, battery, real GPU, real disk — running the commands in §3 takes five minutes and closes the largest evidentiary gap in this repository. **No code change is required:** the probe already emits the `dmi.*`, `gpu.drm_*`, `gpu.edid_bytes`, `tpm.*` and `thermal.*` keys, so `compare.py` will fold the new identifiers into every table automatically (the one probe gap to close is a `battery.*` key — see above). Please open an issue with your four TSVs attached, whichever way the result goes; the predicted outcome is in the table above.
+
 
 Specifically worth checking on real hardware:
 

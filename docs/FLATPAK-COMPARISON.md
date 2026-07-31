@@ -3,6 +3,8 @@
 *A measured comparison against Obsidian Mirror. All figures produced on one machine in one
 session; raw data in [`../evidence/`](../evidence/).*
 
+> **Context:** this page measures *one* tool (Flatpak) to prove the mechanism. The broader point — that the privacy tools people actually trust (**VPN, Tor, Tor Browser**) don't close this vector either — is in [`METADATA-VS-POPULAR-PRIVACY-TOOLS.md`](METADATA-VS-POPULAR-PRIVACY-TOOLS.md).
+
 ---
 
 ## 0. The claim being tested

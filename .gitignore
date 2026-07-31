@@ -1,0 +1,13 @@
+# Editor / OS cruft
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# Python
+__pycache__/
+*.pyc
+
+# Local secrets / tokens must never be committed
+*.token
+*.env

@@ -1,0 +1,166 @@
+id.hostname	workstation-0f6678
+id.uname_nodename	workstation-0f6678
+id.uname_sysname	Linux
+id.uname_release	6.5.6-300.fc39.x86_64
+id.uname_version	#1 SMP PREEMPT_DYNAMIC
+id.uname_machine	x86_64
+id.machine_id	7f96d11360c37262f44b104a98c9aa97
+id.dbus_machine_id	7f96d11360c37262f44b104a98c9aa97
+id.boot_id	f8f9854f-db84-b9a0-7a5b-8e0269fcc420
+id.env_user	guest
+id.env_logname	guest
+id.env_home	/home/guest
+id.uid	1000
+id.gid	1000
+id.username	guest
+id.groupname	guest
+id.passwd_lines	3
+id.group_lines	3
+id.passwd_self	guest:x:1000:1000:Generic User:/home/guest:/bin/sh
+id.shell	/bin/bash
+os.id	fedora
+os.pretty	Fedora Linux 39 (Workstation Edition)
+os.version	39
+os.proc_version	Linux version 6.5.6-300.fc39.x86_64 (mockbuild@bkernel02.iad2.fedoraproject.org) (gcc (GCC) 13.2.1 20230918) #1 SMP PREEMPT_DYNAMIC
+os.proc_cmdline	BOOT_IMAGE=(hd0,gpt2)/vmlinuz-6.5.6-300.fc39.x86_64 root=UUID=06b3b229-6031-c4fa-45b7-a4b9fcdffea0 ro rhgb quiet
+os.kernel_osrelease	6.5.6-300.fc39.x86_64
+os.issue	(none)
+os.lsb_release	(none)
+os.distro_files	(none)
+os.distro_file_names	debian_version
+os.apk_world	(none)
+os.apk_installed	(none)
+cpu.nproc	2
+cpu.model	Intel(R) Core(TM) i5-8250U CPU @ 1.60GHz
+cpu.vendor	GenuineIntel
+cpu.count_cpuinfo	2
+cpu.mhz	1600.000
+cpu.cache	6144 KB
+cpu.bogomips	3600.00
+cpu.flags_len	47
+cpu.online	(none)
+cpu.possible	(none)
+cpu.sysfs_dirs	0
+mem.meminfo_total	8192000
+mem.meminfo_free	4096000
+mem.meminfo_avail	6144000
+mem.meminfo_swap	2097152
+mem.meminfo_lines	31
+mem.sysinfo_total	8192000
+mem.sysinfo_swap	2097152
+time.zone_abbr	GMT
+time.utc_offset	+0000
+time.etc_timezone	(none)
+time.localtime	/usr/share/zoneinfo/Etc/UTC
+time.uptime	64709
+time.btime	1785416361
+time.loadavg	0.15 0.10 0.05
+time.stat_cpulines	2
+ts.mtime_mod3600	0
+ts.mtime_nsec	0
+ts.mtime_raw	2026-07-31 06:00:00.000000000 +0000
+dmi.sys_vendor	(none)
+dmi.product_name	(none)
+dmi.product_version	(none)
+dmi.product_serial	(none)
+dmi.product_uuid	(none)
+dmi.product_family	(none)
+dmi.product_sku	(none)
+dmi.board_vendor	(none)
+dmi.board_name	(none)
+dmi.board_version	(none)
+dmi.board_serial	(none)
+dmi.board_asset_tag	(none)
+dmi.bios_vendor	(none)
+dmi.bios_version	(none)
+dmi.bios_date	(none)
+dmi.bios_release	(none)
+dmi.chassis_vendor	(none)
+dmi.chassis_version	(none)
+dmi.chassis_serial	(none)
+dmi.chassis_asset_tag	(none)
+dmi.chassis_type	(none)
+dmi.modalias	(none)
+fw.acpi_tables	0
+fw.efi_present	no
+fw.dtb_present	no
+blk.devices	(none)
+blk.count	0
+blk.model	(none)
+blk.serial	(none)
+blk.vendor	(none)
+blk.wwid	(none)
+blk.scsi_classes	0
+blk.mount_count	76
+blk.root_source	/dev/root
+tpm.class_nodes	(none)
+tpm.dev_nodes	(none)
+tpm.version	(none)
+pwr.supplies	(none)
+pwr.bat_manufacturer	(none)
+pwr.bat_serial	(none)
+thermal.zone_types	(none)
+hwmon.names	(none)
+thermal.cooling_types	(none)
+bt.addresses	(none)
+rtc.names	(none)
+backlight.types	(none)
+input.proc_count	(none)
+input.dev_count	0
+input.class_count	0
+snd.cards	(none)
+snd.dev_count	0
+usb.device_count	0
+video.dev_nodes	(none)
+hidraw.dev_nodes	(none)
+udev.db_entries	0
+gpu.dri_nodes	(none)
+gpu.dri_count	0
+gpu.drm_class	(none)
+gpu.drm_count	0
+gpu.pci_line	(none)
+gpu.drm_subsys_vendor	(none)
+gpu.drm_subsys_device	(none)
+gpu.drm_label	(none)
+gpu.edid_bytes	0
+gpu.gl_vendor	(glxinfo absent)
+gpu.gl_renderer	(glxinfo absent)
+gpu.gl_ext_count	(glxinfo absent)
+gpu.env_vendor	Intel
+gpu.env_renderer	Mesa Intel(R) HD Graphics 630 (Kaby Lake GT2)
+gpu.mode	compat
+pci.device_count	0
+pci.vendor_ids	(none)
+net.interfaces	eth0 lo
+net.mac_addresses	02:fc:00:00:00:05
+net.resolv_conf	nameserver 8.8.8.8
+net.hosts_lines	8
+proc.pid1_comm	sh
+proc.visible_pids	4
+proc.self_pid	1
+ipc.shm_segments	0
+sec.seccomp_mode	2
+sec.nonewprivs	1
+sec.cap_effective	0000000000000000
+sec.userns_uidmap	1000 0 1
+fs.home_entries	.fake guest
+fs.home_count	2
+fs.tmp_count	0
+fs.userhome_count	2
+fs.root_home	0
+fs.fontconfig_file	/opt/obsidian/fake_root/fonts/fonts.conf
+fs.font_count	38
+fs.font_families	18
+fs.font_family_sig	3565277771
+fs.user_font_dirs	(none)
+fs.hostlocal_font_dirs	/usr/local/share/fonts /etc/fonts/conf.d
+ipc.compositor_ctl	absent
+ipc.dbus_system	refused
+ipc.dbus_session	absent
+ipc.wayland_disp	absent
+ipc.runtime_dir_entries	0
+det.ld_preload	/opt/obsidian/lib/obsidian_core.so:/opt/obsidian/lib/obsidian_wayland.so:/opt/obsidian/lib/obsidian_gpu.so
+det.obsidian_env	5
+det.mount_fakes	0
+det.mountinfo_rows	76
+det.opt_obsidian	visible

@@ -1,0 +1,79 @@
+110 45 0:41 /newroot / rw,nosuid,nodev,relatime - tmpfs tmpfs rw,uid=1000,gid=1000
+111 110 254:0 /home/user/.local/share/flatpak/runtime/org.freedesktop.Platform/x86_64/24.08/5167b74f32952e2efe1baa4b0d3c44bf5cd1ed6c33fa1be36fbd9a1e6e85c943/files /usr ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+112 111 0:42 / /usr/lib/x86_64-linux-gnu/GL rw,nosuid,nodev,relatime - tmpfs tmpfs rw,mode=755,uid=1000,gid=1000
+113 112 254:0 /home/user/.local/share/flatpak/runtime/org.freedesktop.Platform.GL.default/x86_64/24.08/f046ba86468fa5ab1c9e725b83165569b366dd3d8034af43066be9189cfbb0eb/files /usr/lib/x86_64-linux-gnu/GL/default ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+114 113 254:0 /home/user/.local/share/flatpak/runtime/org.freedesktop.Platform.GL.default/x86_64/24.08extra/ac4c5853488c64c15ebbde10225fd3fdc4fb0ccaa0fd4291eac4273a8a81e74c/files /usr/lib/x86_64-linux-gnu/GL/default ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+115 111 254:0 /home/user/.local/share/flatpak/runtime/org.freedesktop.Platform.openh264/x86_64/2.5.1/0f52621e4540863ee86b1fe26216fff78fefa1096f367079692344139228e474/files /usr/lib/x86_64-linux-gnu/openh264 ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+116 111 254:0 /home/user/.local/share/flatpak/runtime/org.freedesktop.Platform.Locale/x86_64/24.08/a1e774b8dde00577340da5060295da4d0698714dcdecfdf551d7347034c19072/files /usr/share/runtime/locale ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+117 110 0:41 /bindfileZ3ypyb//deleted /run/flatpak/ld.so.conf.d/runtime-001-org.freedesktop.Platform.GL.default.conf ro,nosuid,nodev,relatime - tmpfs tmpfs rw,uid=1000,gid=1000
+118 110 0:41 /bindfile23rzMK//deleted /run/flatpak/ld.so.conf.d/runtime-002-org.freedesktop.Platform.openh264.conf ro,nosuid,nodev,relatime - tmpfs tmpfs rw,uid=1000,gid=1000
+119 110 0:41 /bindfilebwzH4u//deleted /run/flatpak/ld.so.conf.d/runtime-003-org.freedesktop.Platform.GL.default.conf ro,nosuid,nodev,relatime - tmpfs tmpfs rw,uid=1000,gid=1000
+120 110 0:43 / /proc rw,nosuid,nodev,noexec,relatime - proc proc rw
+121 110 0:4 user:[4026532086] /run/.userns ro,nosuid,nodev - nsfs nsfs rw
+123 110 0:21 /block /sys/block ro,nosuid,nodev,noexec,relatime master:6 - sysfs sysfs rw
+124 110 0:21 /bus /sys/bus ro,nosuid,nodev,noexec,relatime master:6 - sysfs sysfs rw
+125 110 0:21 /class /sys/class ro,nosuid,nodev,noexec,relatime master:6 - sysfs sysfs rw
+126 110 0:21 /dev /sys/dev ro,nosuid,nodev,noexec,relatime master:6 - sysfs sysfs rw
+127 110 0:21 /devices /sys/devices ro,nosuid,nodev,noexec,relatime master:6 - sysfs sysfs rw
+128 110 0:41 /bindfileMW8vbq//deleted /etc/passwd ro,nosuid,nodev,relatime - tmpfs tmpfs rw,uid=1000,gid=1000
+129 110 0:41 /bindfileY7lB0h//deleted /etc/group ro,nosuid,nodev,relatime - tmpfs tmpfs rw,uid=1000,gid=1000
+130 110 0:41 /bindfileKYyVDP//deleted /etc/pkcs11/pkcs11.conf ro,nosuid,nodev,relatime - tmpfs tmpfs rw,uid=1000,gid=1000
+131 110 254:0 /etc/machine-id /etc/machine-id ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+132 110 254:0 /home/user/.local/share/flatpak/runtime/org.freedesktop.Platform/x86_64/24.08/5167b74f32952e2efe1baa4b0d3c44bf5cd1ed6c33fa1be36fbd9a1e6e85c943/files/etc/e2scrub.conf /etc/e2scrub.conf ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+133 110 254:0 /home/user/.local/share/flatpak/runtime/org.freedesktop.Platform/x86_64/24.08/5167b74f32952e2efe1baa4b0d3c44bf5cd1ed6c33fa1be36fbd9a1e6e85c943/files/etc/issue /etc/issue ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+134 110 254:0 /home/user/.local/share/flatpak/runtime/org.freedesktop.Platform/x86_64/24.08/5167b74f32952e2efe1baa4b0d3c44bf5cd1ed6c33fa1be36fbd9a1e6e85c943/files/etc/issue.net /etc/issue.net ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+135 110 254:0 /home/user/.local/share/flatpak/runtime/org.freedesktop.Platform/x86_64/24.08/5167b74f32952e2efe1baa4b0d3c44bf5cd1ed6c33fa1be36fbd9a1e6e85c943/files/etc/ld.so.conf /etc/ld.so.conf ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+136 110 254:0 /home/user/.local/share/flatpak/runtime/org.freedesktop.Platform/x86_64/24.08/5167b74f32952e2efe1baa4b0d3c44bf5cd1ed6c33fa1be36fbd9a1e6e85c943/files/etc/mke2fs.conf /etc/mke2fs.conf ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+137 110 254:0 /home/user/.local/share/flatpak/runtime/org.freedesktop.Platform/x86_64/24.08/5167b74f32952e2efe1baa4b0d3c44bf5cd1ed6c33fa1be36fbd9a1e6e85c943/files/etc/moduli /etc/moduli ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+138 110 254:0 /home/user/.local/share/flatpak/runtime/org.freedesktop.Platform/x86_64/24.08/5167b74f32952e2efe1baa4b0d3c44bf5cd1ed6c33fa1be36fbd9a1e6e85c943/files/etc/nsswitch.conf /etc/nsswitch.conf ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+139 110 254:0 /home/user/.local/share/flatpak/runtime/org.freedesktop.Platform/x86_64/24.08/5167b74f32952e2efe1baa4b0d3c44bf5cd1ed6c33fa1be36fbd9a1e6e85c943/files/etc/protocols /etc/protocols ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+140 110 254:0 /home/user/.local/share/flatpak/runtime/org.freedesktop.Platform/x86_64/24.08/5167b74f32952e2efe1baa4b0d3c44bf5cd1ed6c33fa1be36fbd9a1e6e85c943/files/etc/rc_maps.cfg /etc/rc_maps.cfg ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+141 110 254:0 /home/user/.local/share/flatpak/runtime/org.freedesktop.Platform/x86_64/24.08/5167b74f32952e2efe1baa4b0d3c44bf5cd1ed6c33fa1be36fbd9a1e6e85c943/files/etc/rpc /etc/rpc ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+142 110 254:0 /home/user/.local/share/flatpak/runtime/org.freedesktop.Platform/x86_64/24.08/5167b74f32952e2efe1baa4b0d3c44bf5cd1ed6c33fa1be36fbd9a1e6e85c943/files/etc/services /etc/services ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+170 110 254:0 /home/user/.local/share/flatpak/runtime/org.freedesktop.Platform/x86_64/24.08/5167b74f32952e2efe1baa4b0d3c44bf5cd1ed6c33fa1be36fbd9a1e6e85c943/files/etc/slsh.rc /etc/slsh.rc ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+173 110 254:0 /home/user/.local/share/flatpak/runtime/org.freedesktop.Platform/x86_64/24.08/5167b74f32952e2efe1baa4b0d3c44bf5cd1ed6c33fa1be36fbd9a1e6e85c943/files/etc/ssh_config /etc/ssh_config ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+174 110 254:0 /home/user/.local/share/flatpak/runtime/org.freedesktop.Platform/x86_64/24.08/5167b74f32952e2efe1baa4b0d3c44bf5cd1ed6c33fa1be36fbd9a1e6e85c943/files/etc/vdpau_wrapper.cfg /etc/vdpau_wrapper.cfg ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+175 110 254:0 /home/user/.local/share/flatpak/runtime/org.freedesktop.Platform/x86_64/24.08/5167b74f32952e2efe1baa4b0d3c44bf5cd1ed6c33fa1be36fbd9a1e6e85c943/files/etc/xattr.conf /etc/xattr.conf ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+176 110 254:0 /home/user/.local/share/flatpak/runtime/org.freedesktop.Platform/x86_64/24.08/5167b74f32952e2efe1baa4b0d3c44bf5cd1ed6c33fa1be36fbd9a1e6e85c943/files/etc/alsa /etc/alsa ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+177 110 254:0 /home/user/.local/share/flatpak/runtime/org.freedesktop.Platform/x86_64/24.08/5167b74f32952e2efe1baa4b0d3c44bf5cd1ed6c33fa1be36fbd9a1e6e85c943/files/etc/debuginfod /etc/debuginfod ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+178 110 254:0 /home/user/.local/share/flatpak/runtime/org.freedesktop.Platform/x86_64/24.08/5167b74f32952e2efe1baa4b0d3c44bf5cd1ed6c33fa1be36fbd9a1e6e85c943/files/etc/fonts /etc/fonts ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+179 110 254:0 /home/user/.local/share/flatpak/runtime/org.freedesktop.Platform/x86_64/24.08/5167b74f32952e2efe1baa4b0d3c44bf5cd1ed6c33fa1be36fbd9a1e6e85c943/files/etc/gtk-3.0 /etc/gtk-3.0 ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+180 110 254:0 /home/user/.local/share/flatpak/runtime/org.freedesktop.Platform/x86_64/24.08/5167b74f32952e2efe1baa4b0d3c44bf5cd1ed6c33fa1be36fbd9a1e6e85c943/files/etc/pki /etc/pki ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+187 110 254:0 /home/user/.local/share/flatpak/runtime/org.freedesktop.Platform/x86_64/24.08/5167b74f32952e2efe1baa4b0d3c44bf5cd1ed6c33fa1be36fbd9a1e6e85c943/files/etc/profile.d /etc/profile.d ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+190 110 254:0 /home/user/.local/share/flatpak/runtime/org.freedesktop.Platform/x86_64/24.08/5167b74f32952e2efe1baa4b0d3c44bf5cd1ed6c33fa1be36fbd9a1e6e85c943/files/etc/pulse /etc/pulse ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+191 110 254:0 /home/user/.local/share/flatpak/runtime/org.freedesktop.Platform/x86_64/24.08/5167b74f32952e2efe1baa4b0d3c44bf5cd1ed6c33fa1be36fbd9a1e6e85c943/files/etc/rc_keymaps /etc/rc_keymaps ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+193 110 254:0 /home/user/.local/share/flatpak/runtime/org.freedesktop.Platform/x86_64/24.08/5167b74f32952e2efe1baa4b0d3c44bf5cd1ed6c33fa1be36fbd9a1e6e85c943/files/etc/security /etc/security ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+194 110 254:0 /home/user/.local/share/flatpak/runtime/org.freedesktop.Platform/x86_64/24.08/5167b74f32952e2efe1baa4b0d3c44bf5cd1ed6c33fa1be36fbd9a1e6e85c943/files/etc/ssl /etc/ssl ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+195 110 254:0 /home/user/.local/share/flatpak/runtime/org.freedesktop.Platform/x86_64/24.08/5167b74f32952e2efe1baa4b0d3c44bf5cd1ed6c33fa1be36fbd9a1e6e85c943/files/etc/xdg /etc/xdg ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+196 111 254:0 /usr/share/zoneinfo /usr/share/zoneinfo ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+197 110 0:41 /bindfileUAVWNH//deleted /etc/timezone ro,nosuid,nodev,relatime - tmpfs tmpfs rw,uid=1000,gid=1000
+198 110 254:0 /etc/resolv.conf /etc/resolv.conf ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+199 110 254:0 /etc/host.conf /etc/host.conf ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+200 110 254:0 /etc/hosts /etc/hosts ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+201 110 254:0 /etc/gai.conf /etc/gai.conf ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+202 135 0:41 /bindfile2Qeiip//deleted /etc/ld.so.conf ro,nosuid,nodev,relatime - tmpfs tmpfs rw,uid=1000,gid=1000
+203 110 0:41 /bindfileSuetPR//deleted /etc/ld.so.cache ro,nosuid,nodev,relatime - tmpfs tmpfs rw,uid=1000,gid=1000
+204 110 254:0 /home/user/.cache/.flatpak/3558059400 /run/flatpak/.flatpak/3558059400 ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+205 110 0:41 /bindfileUPxLgR//deleted /.flatpak-info ro,nosuid,nodev,relatime - tmpfs tmpfs rw,uid=1000,gid=1000
+206 110 0:41 /bindfilexjN23h//deleted /run/host/container-manager ro,nosuid,nodev,relatime - tmpfs tmpfs rw,uid=1000,gid=1000
+207 110 254:0 /home/user/.cache/.flatpak/org.freedesktop.Platform/xdg-run /run/user/1000 rw,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+208 110 0:44 / /dev rw,nosuid,nodev,relatime - tmpfs tmpfs rw,mode=755,uid=1000,gid=1000
+209 208 0:5 /null /dev/null rw,nosuid,relatime master:2 - devtmpfs devtmpfs rw,size=1013452k,nr_inodes=253363,mode=755
+210 208 0:5 /zero /dev/zero rw,nosuid,relatime master:2 - devtmpfs devtmpfs rw,size=1013452k,nr_inodes=253363,mode=755
+211 208 0:5 /full /dev/full rw,nosuid,relatime master:2 - devtmpfs devtmpfs rw,size=1013452k,nr_inodes=253363,mode=755
+212 208 0:5 /random /dev/random rw,nosuid,relatime master:2 - devtmpfs devtmpfs rw,size=1013452k,nr_inodes=253363,mode=755
+213 208 0:5 /urandom /dev/urandom rw,nosuid,relatime master:2 - devtmpfs devtmpfs rw,size=1013452k,nr_inodes=253363,mode=755
+214 208 0:5 /tty /dev/tty rw,nosuid,relatime master:2 - devtmpfs devtmpfs rw,size=1013452k,nr_inodes=253363,mode=755
+215 208 0:45 / /dev/pts rw,nosuid,noexec,relatime - devpts devpts rw,mode=620,ptmxmode=666
+216 110 254:0 /home/user/.cache/.flatpak/org.freedesktop.Platform/tmp /tmp rw,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+217 110 254:0 /usr/lib/os-release /run/host/os-release ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+218 216 0:46 / /tmp/.X11-unix rw,nosuid,nodev,relatime - tmpfs tmpfs rw,mode=755,uid=1000,gid=1000
+219 110 254:0 /home/user/.cache/.flatpak/org.freedesktop.Platform/.ref /run/flatpak/per-app-dirs-ref ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+220 110 0:24 /systemd/journal/socket /run/systemd/journal/socket ro,nosuid,nodev master:12 - tmpfs tmpfs rw,size=406524k,nr_inodes=819200,mode=755
+221 110 0:24 /systemd/journal/stdout /run/systemd/journal/stdout ro,nosuid,nodev master:12 - tmpfs tmpfs rw,size=406524k,nr_inodes=819200,mode=755
+222 110 254:0 /usr/share/fonts /run/host/fonts ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+223 110 254:0 /usr/local/share/fonts /run/host/local-fonts ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+224 110 254:0 /var/cache/fontconfig /run/host/fonts-cache ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard
+225 110 0:47 / /run/host/user-fonts-cache ro,nosuid,nodev,relatime - tmpfs tmpfs rw,mode=755,uid=1000,gid=1000
+226 110 0:41 /bindfileJs6ncO//deleted /run/host/font-dirs.xml ro,nosuid,nodev,relatime - tmpfs tmpfs rw,uid=1000,gid=1000
+227 110 254:0 /usr/share/icons /run/host/share/icons ro,nosuid,nodev,relatime master:1 - ext4 /dev/root rw,discard

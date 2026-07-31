@@ -1,0 +1,166 @@
+id.hostname	e2b.local
+id.uname_nodename	e2b.local
+id.uname_sysname	Linux
+id.uname_release	6.1.158+
+id.uname_version	#1 SMP PREEMPT_DYNAMIC Fri Jul 17 14:31:34 UTC 2026
+id.uname_machine	x86_64
+id.machine_id	67549745dd1a4564be928e47dca271fd
+id.dbus_machine_id	(none)
+id.boot_id	2bb79165-136a-4b63-829d-17027b0a8e40
+id.env_user	user
+id.env_logname	user
+id.env_home	/home/user
+id.uid	1000
+id.gid	1000
+id.username	user
+id.groupname	user
+id.passwd_lines	2
+id.group_lines	2
+id.passwd_self	user:x:1000:1000:Unknown:/home/user:/bin/sh
+id.shell	/bin/sh
+os.id	org.freedesktop.platform
+os.pretty	Freedesktop SDK 24.08 (Flatpak runtime)
+os.version	24.08
+os.proc_version	Linux version 6.1.158+ (root@runnervm3jd5f) (gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, GNU ld (GNU Binutils for Ubuntu) 2.42) #1 SMP PREEMPT_DYNAMIC Fri Jul
+os.proc_cmdline	clocksource=kvm-clock i8042.noaux i8042.nokbd init=/sbin/init ip=169.254.0.21::169.254.0.22:255.255.255.252:instance:eth0:off:tap0 ipv6.autoconf=1 ipv6.disable=0 loglevel=1 panic=1 pci=off quiet random.trust_cpu=on reboot=k rootflags=discard pci=off virtio_mmio.device=4K@0xc0001000:6 root=/dev/vda rw virtio_mmio.device=4K@0xc0002000:7 virtio_mmio.device=4K@0xc0003000:8 virtio_mmio.device=4K@0xc000
+os.kernel_osrelease	6.1.158+
+os.issue	Freedesktop Platform 24.08 \n \l
+os.lsb_release	(none)
+os.distro_files	(none)
+os.distro_file_names	(none)
+os.apk_world	(none)
+os.apk_installed	(none)
+cpu.nproc	2
+cpu.model	Intel(R) Xeon(R) Processor @ 2.60GHz
+cpu.vendor	GenuineIntel
+cpu.count_cpuinfo	2
+cpu.mhz	2600.028
+cpu.cache	55296 KB
+cpu.bogomips	5200.05
+cpu.flags_len	106
+cpu.online	0-1
+cpu.possible	0-1
+cpu.sysfs_dirs	2
+mem.meminfo_total	2032608
+mem.meminfo_free	206548
+mem.meminfo_avail	1540868
+mem.meminfo_swap	0
+mem.meminfo_lines	53
+mem.sysinfo_total	2032608
+mem.sysinfo_swap	0
+time.zone_abbr	UTC
+time.utc_offset	+0000
+time.etc_timezone	Etc/UTC
+time.localtime	../usr/share/zoneinfo/Etc/UTC
+time.uptime	151
+time.btime	1785480903
+time.loadavg	0.58 0.27 0.10
+time.stat_cpulines	2
+ts.mtime_mod3600	3455
+ts.mtime_nsec	118246762
+ts.mtime_raw	2026-07-31 06:57:35.118246762 +0000
+dmi.sys_vendor	(none)
+dmi.product_name	(none)
+dmi.product_version	(none)
+dmi.product_serial	(none)
+dmi.product_uuid	(none)
+dmi.product_family	(none)
+dmi.product_sku	(none)
+dmi.board_vendor	(none)
+dmi.board_name	(none)
+dmi.board_version	(none)
+dmi.board_serial	(none)
+dmi.board_asset_tag	(none)
+dmi.bios_vendor	(none)
+dmi.bios_version	(none)
+dmi.bios_date	(none)
+dmi.bios_release	(none)
+dmi.chassis_vendor	(none)
+dmi.chassis_version	(none)
+dmi.chassis_serial	(none)
+dmi.chassis_asset_tag	(none)
+dmi.chassis_type	(none)
+dmi.modalias	(none)
+fw.acpi_tables	0
+fw.efi_present	no
+fw.dtb_present	no
+blk.devices	loop0 loop1 loop2 loop3 loop4 loop5 loop6 loop7 vda
+blk.count	9
+blk.model	(none)
+blk.serial	(none)
+blk.vendor	0x0000
+blk.wwid	(none)
+blk.scsi_classes	0
+blk.mount_count	79
+blk.root_source	tmpfs
+tpm.class_nodes	(none)
+tpm.dev_nodes	(none)
+tpm.version	(none)
+pwr.supplies	(none)
+pwr.bat_manufacturer	(none)
+pwr.bat_serial	(none)
+thermal.zone_types	(none)
+hwmon.names	(none)
+thermal.cooling_types	(none)
+bt.addresses	(none)
+rtc.names	(none)
+backlight.types	(none)
+input.proc_count	0
+input.dev_count	0
+input.class_count	0
+snd.cards	(none)
+snd.dev_count	0
+usb.device_count	0
+video.dev_nodes	(none)
+hidraw.dev_nodes	(none)
+udev.db_entries	0
+gpu.dri_nodes	(none)
+gpu.dri_count	0
+gpu.drm_class	(none)
+gpu.drm_count	0
+gpu.pci_line	(none)
+gpu.drm_subsys_vendor	(none)
+gpu.drm_subsys_device	(none)
+gpu.drm_label	(none)
+gpu.edid_bytes	0
+gpu.gl_vendor	(glxinfo absent)
+gpu.gl_renderer	(glxinfo absent)
+gpu.gl_ext_count	(glxinfo absent)
+gpu.env_vendor	(none)
+gpu.env_renderer	(none)
+gpu.mode	(unset)
+pci.device_count	0
+pci.vendor_ids	(none)
+net.interfaces	eth0 lo
+net.mac_addresses	02:fc:00:00:00:05
+net.resolv_conf	nameserver 8.8.8.8
+net.hosts_lines	8
+proc.pid1_comm	bwrap
+proc.visible_pids	5
+proc.self_pid	2
+ipc.shm_segments	0
+sec.seccomp_mode	2
+sec.nonewprivs	1
+sec.cap_effective	0000000000000000
+sec.userns_uidmap	1000 0 1
+fs.home_entries	user
+fs.home_count	1
+fs.tmp_count	1
+fs.userhome_count	1
+fs.root_home	0
+fs.fontconfig_file	(unset)
+fs.font_count	126
+fs.font_families	43
+fs.font_family_sig	327639698
+fs.user_font_dirs	(none)
+fs.hostlocal_font_dirs	/etc/fonts/conf.d
+ipc.compositor_ctl	absent
+ipc.dbus_system	absent
+ipc.dbus_session	absent
+ipc.wayland_disp	absent
+ipc.runtime_dir_entries	2
+det.ld_preload	(none)
+det.obsidian_env	0
+det.mount_fakes	0
+det.mountinfo_rows	79
+det.opt_obsidian	hidden

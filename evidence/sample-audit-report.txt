@@ -1,0 +1,317 @@
+
+----------------------------------------------------------------------------------------------------
+ OBSIDIAN MIRROR - METADATA PROTECTION AUDIT
+ host <-> application layer   (network layer out of scope by design)
+----------------------------------------------------------------------------------------------------
+
+ 1. PROTECTED METADATA - SUMMARY
+----------------------------------------------------------------------------------------------------
+   What the host reveals about itself, and how much of it the
+   application is prevented from seeing.
+
+   CATEGORY                         GRADED  PROTECT    COVER
+   ------------------------------   ------  -------    -----
+   IDENTITY                             16       16     100%
+   OPERATING SYSTEM                      8        8     100%
+   PROCESSOR                            10       10     100%
+   MEMORY                                5        5     100%
+   TIME & CLOCK                          6        6     100%
+   FILE TIMESTAMPS                       2        2     100%
+   FIRMWARE TABLES                       1        1     100%
+   STORAGE                               4        4     100%
+   INPUT DEVICES                         3        3     100%
+   AUDIO                                 1        1     100%
+   USB BUS                               1        1     100%
+   UDEV                                  1        1     100%
+   GPU / GRAPHICS                        1        1     100%
+   PROCESS TABLE                         2        2     100%
+   IPC & COMPOSITOR SOCKETS              3        3     100%
+   KERNEL CONFINEMENT                    3        3     100%
+   FILESYSTEM & FONTS                    3        2      66%
+   DETECTABILITY                         4        1      25%
+   ------------------------------   ------  -------    -----
+   TOTAL                                74       70      94%
+
+   Protected (spoofed, masked or blocked)     70
+   Not protected - known gap (see section 3)  4
+   Not protected - unexpected leak            0
+   Out of scope (network layer)               4
+   Not applicable (no such hardware here)     50
+   Informational only                         28
+
+ 2. REAL vs PROTECTED - ITEM BY ITEM
+----------------------------------------------------------------------------------------------------
+   REAL is what this host actually is. MIRRORED is all the
+   application is given.
+
+STATUS    ITEM                               REAL (host)                 MIRRORED (app sees)
+----------------------------------------------------------------------------------------------------
+
+  IDENTITY
+PROTECT   Hostname (UTS namespace)           e2b.local                   host-be7663
+PROTECT   uname nodename                     e2b.local                   host-be7663
+PROTECT   Kernel release (uname -r)          6.1.158+                    6.6.10-76060610-generic
+PROTECT   Kernel version string              #1 SMP PREEMPT_DYNAMIC Fri~ #1 SMP PREEMPT_DYNAMIC
+PROTECT   /etc/machine-id                    67549745dd1a4564be928e47dc~ 2dd372a5a805f20810419e4eb3~
+PROTECT   D-Bus machine-id                   67549745dd1a4564be928e47dc~ 2dd372a5a805f20810419e4eb3~
+PROTECT   Kernel boot_id                     2bb79165-136a-4b63-829d-17~ a2f02e64-75f9-ca63-1dfd-08~
+PROTECT   $USER                              user                        admin
+PROTECT   $HOME                              /home/user                  /home/admin
+PROTECT   Numeric UID                        1000                        1000
+PROTECT   Numeric GID                        1000                        1000
+PROTECT   getpwuid() name                    user                        admin
+PROTECT   getgrgid() name                    user                        admin
+PROTECT   /etc/passwd entry count            25                          3
+PROTECT   /etc/group entry count             44                          3
+PROTECT   Own passwd record                  user:x:1000:1000::/home/us~ admin:x:1000:1000:Generic ~
+
+  OPERATING SYSTEM
+PROTECT   Distribution ID                    debian                      pop
+PROTECT   Distribution pretty name           Debian GNU/Linux 13 (trixi~ Pop!_OS 22.04 LTS
+PROTECT   Distribution version               13                          22.04
+PROTECT   /proc/version                      Linux version 6.1.158+ (ro~ Linux version 6.6.10-76060~
+PROTECT   /proc/cmdline (boot args + root UU clocksource=kvm-clock i804~ splash loglevel=0 systemd.~
+PROTECT   /proc/sys/kernel/osrelease         6.1.158+                    6.6.10-76060610-generic
+PROTECT   /etc/issue                         Debian GNU/Linux 13 \n \l   (none)
+N/A       /etc/lsb-release                   (none)                      (none)
+PROTECT   Distro release file contents       13.6                        (none)
+N/A       Package selection list             (none)                      (none)
+N/A       Installed package database         (none)                      (none)
+
+  PROCESSOR
+PROTECT   nproc()                            2                           2
+PROTECT   CPU model name                     Intel(R) Xeon(R) Processor~ Intel(R) Core(TM) i5-8250U~
+PROTECT   CPU vendor                         GenuineIntel                GenuineIntel
+PROTECT   Core count (/proc/cpuinfo)         2                           2
+PROTECT   CPU clock                          2600.028                    1600.000
+PROTECT   CPU cache size                     55296 KB                    6144 KB
+PROTECT   BogoMIPS                           5200.05                     3600.00
+PROTECT   cpu/online (open() redirect)       0-1                         (none)
+PROTECT   cpu/possible (open() redirect)     0-1                         (none)
+PROTECT   Per-core sysfs directories         2                           0
+
+  MEMORY
+PROTECT   RAM total (/proc/meminfo)          2032608                     8192000
+PROTECT   RAM free (/proc/meminfo)           1266072                     4096000
+PROTECT   RAM available (/proc/meminfo)      1543244                     6144000
+PROTECT   Swap total (/proc/meminfo)         0                           2097152
+PROTECT   RAM via sysinfo()                  2032608                     8192000
+
+  TIME & CLOCK
+PROTECT   Timezone abbreviation              UTC                         GMT
+PROTECT   UTC offset                         +0000                       +0000
+N/A       /etc/timezone                      (none)                      (none)
+PROTECT   System uptime                      1579                        39735
+PROTECT   Boot timestamp (/proc/stat)        1785471029                  1785432874
+PROTECT   Load average                       0.20 0.11 0.04              0.15 0.10 0.05
+PROTECT   Per-CPU rows in /proc/stat         2                           2
+
+  FILE TIMESTAMPS
+PROTECT   File mtime, second within hour     2208                        0
+PROTECT   File mtime nanoseconds (statx)     898860860                   0
+
+  DMI / SMBIOS FIRMWARE
+N/A       DMI system vendor                  (none)                      (none)
+N/A       DMI product name                   (none)                      (none)
+N/A       DMI product version                (none)                      (none)
+N/A       DMI product serial                 (none)                      (none)
+N/A       DMI product UUID                   (none)                      (none)
+N/A       DMI product family                 (none)                      (none)
+N/A       DMI product SKU                    (none)                      (none)
+N/A       DMI board vendor                   (none)                      (none)
+N/A       DMI board name                     (none)                      (none)
+N/A       DMI board version                  (none)                      (none)
+N/A       DMI board serial                   (none)                      (none)
+N/A       DMI board asset tag                (none)                      (none)
+N/A       BIOS vendor                        (none)                      (none)
+N/A       BIOS version                       (none)                      (none)
+N/A       BIOS date                          (none)                      (none)
+N/A       BIOS release                       (none)                      (none)
+N/A       DMI chassis vendor                 (none)                      (none)
+N/A       DMI chassis version                (none)                      (none)
+N/A       DMI chassis serial                 (none)                      (none)
+N/A       DMI chassis asset tag              (none)                      (none)
+N/A       DMI chassis type                   (none)                      (none)
+N/A       DMI modalias string                (none)                      (none)
+
+  FIRMWARE TABLES
+PROTECT   ACPI table blobs                   6                           0
+
+  STORAGE
+PROTECT   Block device list                  loop0 loop1 loop2 loop3 lo~ (none)
+PROTECT   Block device count                 9                           0
+N/A       Disk model                         (none)                      (none)
+N/A       Disk serial                        (none)                      (none)
+PROTECT   Disk vendor                        0x0000                      (none)
+N/A       Disk WWID                          (none)                      (none)
+PROTECT   SCSI/ATA class entries             0                           0
+
+  TPM / CRYPTO HARDWARE
+N/A       TPM sysfs class                    (none)                      (none)
+N/A       TPM version                        (none)                      (none)
+
+  POWER & BATTERY
+N/A       Battery manufacturer               (none)                      (none)
+N/A       Battery serial                     (none)                      (none)
+
+  THERMAL
+N/A       Thermal zone types                 (none)                      (none)
+
+  SENSORS
+N/A       Hwmon sensor driver names          (none)                      (none)
+
+  THERMAL
+N/A       Cooling device types               (none)                      (none)
+
+  BLUETOOTH
+N/A       Bluetooth adapter MAC              (none)                      (none)
+
+  REAL-TIME CLOCK
+N/A       RTC driver name                    (none)                      (none)
+
+  DISPLAY BACKLIGHT
+N/A       Backlight type                     (none)                      (none)
+
+  INPUT DEVICES
+PROTECT   Input devices (/proc/bus/input)    0                           (none)
+PROTECT   /dev/input nodes                   0                           0
+PROTECT   /sys/class/input entries           0                           0
+
+  AUDIO
+N/A       ALSA card list                     (none)                      (none)
+PROTECT   /dev/snd nodes                     0                           0
+
+  USB BUS
+PROTECT   USB device count                   0                           0
+
+  UDEV
+PROTECT   udev database entries              0                           0
+
+  GPU / GRAPHICS
+N/A       DRM subsystem vendor (OEM board pi (none)                      (none)
+N/A       DRM subsystem device (OEM board pi (none)                      (none)
+N/A       DRM device label                   (none)                      (none)
+PROTECT   Monitor EDID (serial + build date) 0                           0
+N/A       DRM render nodes (/dev/dri)        (none)                      (none)
+N/A       DRM sysfs class                    (none)                      (none)
+N/A       GPU PCI identification             (none)                      (none)
+
+  PCI BUS
+N/A       PCI vendor ID set                  (none)                      (none)
+
+  NETWORK (out of scope)
+SCOPE     Network interface names            eth0 lo                     eth0 lo
+SCOPE     NIC MAC addresses                  02:fc:00:00:00:05           02:fc:00:00:00:05
+SCOPE     DNS resolver configuration         nameserver 8.8.8.8          nameserver 8.8.8.8
+SCOPE     /etc/hosts                         8                           8
+
+  PROCESS TABLE
+PROTECT   Visible process count (PID ns)     93                          4
+PROTECT   PID 1 command                      systemd                     sh
+
+  IPC & COMPOSITOR SOCKETS
+PROTECT   SysV shared memory segments        0                           0
+N/A       Compositor control socket          absent                      absent
+PROTECT   D-Bus system bus                   connected                   refused
+N/A       D-Bus session bus                  absent                      absent
+PROTECT   XDG_RUNTIME_DIR contents           0                           0
+
+  KERNEL CONFINEMENT
+PROTECT   seccomp filter mode                0                           2
+PROTECT   NoNewPrivs flag                    0                           1
+PROTECT   User namespace UID map             0 0 4294967295              1000 0 1
+
+  FILESYSTEM & FONTS
+PROTECT   /home contents                     user                        .fake admin
+N/A       Per-user font directories          (none)                      (none)
+PROTECT   Fontconfig pinned to Obsidian conf (unset)                     /opt/obsidian/fake_root/fo~
+GAP       Host /root readable (no pivot_root 0                           0
+
+  DETECTABILITY
+GAP       LD_PRELOAD visible to application  (none)                      /opt/obsidian/lib/obsidian~
+GAP       OBSIDIAN_* variables in environmen 0                           5
+PROTECT   Spoof binds visible in mountinfo   0                           0
+GAP       /opt/obsidian visible in filesyste visible                     visible
+
+ 3. HOST METADATA NOT PROTECTED - AND WHY
+----------------------------------------------------------------------------------------------------
+
+   KNOWN LIMITATIONS - not covered, by design or by physics
+
+   * Host /root readable (no pivot_root)  [fs.root_home]
+       app sees  : 0
+       reason: There is no pivot_root, so the host filesystem outside the masked paths is still
+       visible, subject to normal permissions. /home is tmpfs, so user data is covered; /root,
+       /var, /srv and other users' files are not. Fixing this needs a full root pivot, which
+       breaks applications that read their own installation directory.
+
+   * LD_PRELOAD visible to application  [det.ld_preload]
+       app sees  : /opt/obsidian/lib/obsidian_core.so:/opt/obsidian/lib/obsidian_wayland.so:/opt/obsidian/lib/obsidian_gpu.so
+       reason: LD_PRELOAD must stay set for the libc hooks to exist. Any application that reads
+       /proc/self/environ can see it. Obsidian Mirror makes you anonymous, not invisible.
+
+   * OBSIDIAN_* variables in environment  [det.obsidian_env]
+       app sees  : 5
+       reason: The hooks read their spoofed values from these variables, so they have to be in the
+       environment.
+
+   * /opt/obsidian visible in filesystem  [det.opt_obsidian]
+       app sees  : visible
+       reason: The launcher, hooks and manifest have to live somewhere the sandboxed process can
+       reach.
+
+
+   OUT OF SCOPE - the network layer, excluded by design
+
+   * Network interface names  [net.interfaces]
+       app sees  : eth0 lo
+       reason: Network layer is out of scope by design. Pair Obsidian Mirror with a VPN or a
+       network namespace.
+
+   * NIC MAC addresses  [net.mac_addresses]
+       app sees  : 02:fc:00:00:00:05
+       reason: Out of scope. getifaddrs() is hooked, but anything using netlink directly (ip, ss,
+       most language runtimes) sees the real MAC.
+
+   * DNS resolver configuration  [net.resolv_conf]
+       app sees  : nameserver 8.8.8.8
+       reason: Out of scope: resolver identity belongs to the network layer.
+
+   * /etc/hosts  [net.hosts_lines]
+       app sees  : 8
+       reason: Out of scope.
+
+
+   CANNOT BE FIXED AT THIS LAYER
+     * CPUID instruction: runs in userspace. Real CPU vendor, family, model, stepping and feature
+     bits are readable by any program. /proc/cpuinfo is spoofed; the instruction is not. Only a
+     hypervisor can mask it.
+     * RDTSC and timing: clock skew, TSC frequency and boot-time correlation are physical
+     properties of the machine.
+     * Raw syscalls bypass LD_PRELOAD: syscall(SYS_uname) returns the real kernel release. Go
+     binaries, static binaries and hand-written assembly skip libc entirely. Mount-level spoofs
+     still apply to them; libc hooks do not.
+     * setuid / setgid binaries: the dynamic loader drops LD_PRELOAD for them, so they run
+     unhooked.
+     * glibc symbol aliases: programs calling __xstat / __fxstat (gcompat, glibc containers) miss
+     the stat hooks.
+     * Detectability: an application can tell it is being mirrored. Obsidian Mirror makes you
+     anonymous, not invisible.
+
+ 4. APPLICATION COMPATIBILITY
+----------------------------------------------------------------------------------------------------
+   The isolation layer must not change how a wrapped program
+   behaves. Checked live on every audit run.
+
+   OK        argv passed through unflattened        one|two three|four|
+   OK        exit status propagates                 42
+   OK        stdin reaches the application          obsidian-stdin-ok
+   N/A       Wayland display socket reachable       no compositor on host
+   N/A       GPU render node available              no DRM device on host
+
+----------------------------------------------------------------------------------------------------
+ VERDICT: 70 of 74 graded host identifiers are hidden from the application (94%).
+          4 documented limitation(s) - see section 3.
+          All compatibility checks passed.
+----------------------------------------------------------------------------------------------------
+

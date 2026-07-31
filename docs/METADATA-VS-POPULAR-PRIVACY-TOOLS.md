@@ -145,7 +145,7 @@ This document is **not** an argument against VPNs or Tor. They stop your ISP and
 
 - **Not anonymity.** Reduces *device* fingerprinting by local apps. Does not hide traffic, accounts or behavior.
 - **Network layer out of scope by design.** No routing, no IP hiding.
-- **DMI / TPM / EDID / battery not yet measured.** This was built on a headless VM with no DMI table, TPM, battery or GPU; those keys read `(none)` and are excluded from counts (see [`METHODOLOGY.md` §5](METHODOLOGY.md#5-what-this-machine-could-not-test)). The probe already emits the `dmi.*`, `gpu.drm_*`, `gpu.edid_bytes`, `tpm.*` and `thermal.*` keys — we only need someone with real hardware to run it. **PRs welcome.**
+- **DMI / TPM / EDID / battery not yet measured.** This was built on a headless VM with no DMI table, TPM, battery or GPU; those keys read `(none)` and are excluded from counts (see [`METHODOLOGY.md` §5](METHODOLOGY.md#5-what-this-machine-could-not-test)). The probe already emits the `dmi.*`, `gpu.drm_*`, `gpu.edid_bytes`, `tpm.*` and `thermal.*` keys — we only need someone with real hardware to run it. **PRs welcome** — if you contribute probe data, redact `id.machine_id` / `dmi.*` / `net.mac_addresses` / `bt.addresses` / `net.resolv_conf` first (GitHub issues are public).
 
 ---
 

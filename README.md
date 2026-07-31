@@ -100,7 +100,7 @@ See [`docs/COVERAGE.md`](docs/COVERAGE.md) for exactly what is covered and what 
 
 - **This is not anonymity.** It reduces *device* fingerprinting by local apps. It does not hide your traffic, your accounts, or your behavior. Use it **with** a VPN/Tor, not instead of one.
 - **VPN / Tor are still necessary.** They stop your ISP and the local network from reading your traffic and hide your origin from servers. Obsidian Mirror is the layer they *don't* provide.
-- **The DMI/TPM/EDID/battery gap.** This was measured on a headless VM with no DMI table, TPM, battery, or GPU, so those identifiers read `(none)` on all four environments and are excluded from the counts (see [`docs/METHODOLOGY.md` §5](docs/METHODOLOGY.md#5-what-this-machine-could-not-test)). The probe already measures those keys; we just need someone with real hardware to run it. **PRs welcome.**
+- **The DMI/TPM/EDID/battery gap.** This was measured on a headless VM with no DMI table, TPM, battery, or GPU, so those identifiers read `(none)` on all four environments and are excluded from the counts (see [`docs/METHODOLOGY.md` §5](docs/METHODOLOGY.md#5-what-this-machine-could-not-test)). The probe already measures those keys; we just need someone with real hardware to run it. **PRs welcome** — if you contribute probe data, redact `id.machine_id` / `dmi.*` / `net.mac_addresses` / `bt.addresses` / `net.resolv_conf` first (GitHub issues are public).
 - **Network layer is out of scope by design.** No traffic routing, no IP hiding.
 
 ---

@@ -179,9 +179,33 @@ These are *predictions from a proven mechanism*, not measurements — they are m
 **Reproducibility check (2026-07-31):** the host probe was re-run standalone on this VM; it emitted all 166 keys and `/etc/machine-id` was byte-identical to the committed `probe-host.tsv` (`67549745dd1a4564be928e47dca271fd`). The §3 commands are valid and reproducible.
 
 
-### This is the single most useful contribution anyone can make
+### Contributing real-hardware data (optional — anonymize first)
 
-If you have a **physical laptop or desktop** — DMI table, TPM, battery, real GPU, real disk — running the commands in §3 takes five minutes and closes the largest evidentiary gap in this repository. **No code change is required:** the probe already emits the `dmi.*`, `gpu.drm_*`, `gpu.edid_bytes`, `tpm.*` and `thermal.*` keys, so `compare.py` will fold the new identifiers into every table automatically (the one probe gap to close is a `battery.*` key — see above). Please open an issue with your four TSVs attached, whichever way the result goes; the predicted outcome is in the table above.
+You do **not** need to share anything. The predicted results above are already
+backed by the measured mount table in `evidence/flatpak-sandbox-mountinfo.txt`,
+and this section is honest as written. If you *want* to turn the prediction into a
+measurement, do it safely:
+
+1. **Redact before you post.** A GitHub issue is **public**, and the raw probe
+   output contains persistent device identifiers. Before attaching anything,
+   strip or replace these keys — a one-liner is enough (see below):
+   `id.machine_id`, `dmi.*`, `net.mac_addresses`, `bt.addresses`, `net.resolv_conf`.
+   The remaining keys (CPU model, RAM, GPU class, EDID *size*, thermal zones,
+   filesystem layout…) are generic enough to share.
+2. **Or use a disposable machine.** Run the probe on a throwaway VM / spare
+   laptop so no real identifier is involved at all.
+3. **No code change is required.** The probe already emits `dmi.*`, `gpu.drm_*`,
+   `gpu.edid_bytes`, `tpm.*` and `thermal.*`, so `compare.py` folds the new
+   identifiers into every table automatically (the one probe gap to close is a
+   `battery.*` key — see above).
+
+Redaction one-liner (run on the TSV before posting):
+```sh
+sed -E 's/^(id\.machine_id|dmi\.[a-z_]+|net\.mac_addresses|bt\.addresses|net\.resolv_conf)\t.*/\1\tREDACTED/' your-probe.tsv > your-probe-redacted.tsv
+```
+
+If you would rather not contribute, that is completely fine — the gap stays
+documented as a prediction, which is the honest state.
 
 
 Specifically worth checking on real hardware:

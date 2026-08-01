@@ -463,12 +463,15 @@ static int ll_add_path(int ruleset_fd, const char *path, enum ob_kind kind)
 
     if (stat(path, &st) != 0) return 0;      /* absent here: nothing to grant */
 
-    fd = open(path, O_PATH | O_CLOEXEC | O_NOFOLLOW);
-    if (fd < 0) {
-        /* O_NOFOLLOW on a symlink: resolve it and grant the target */
-        fd = open(path, O_PATH | O_CLOEXEC);
-        if (fd < 0) { rules_skipped++; return 0; }
-    }
+    /* Symlinks are followed deliberately. O_PATH|O_NOFOLLOW does not
+     * fail on a symlink, it succeeds and hands back the link itself,
+     * and a rule attached to a symlink inode governs nothing - so
+     * granting /bin on a distribution where /bin -> usr/bin used to
+     * be accepted, counted, and silently worthless. stat() above
+     * already followed the link to decide the rights, so following it
+     * here is also the only way the two agree. */
+    fd = open(path, O_PATH | O_CLOEXEC);
+    if (fd < 0) { rules_skipped++; return 0; }
 
     pb.allowed_access = rights_for(kind, S_ISDIR(st.st_mode));
     pb.parent_fd = fd;
@@ -1411,6 +1414,95 @@ static void grant_app_tree(const char *binpath)
     add_grant(dir, OB_RX);
 }
 
+/* The interpreter of a #! target, discovered before the ruleset is
+ * loaded and kept for the failure message. */
+static char app_interp[PATH_MAX];
+
+/* Read a #! line. Fills interp with the interpreter and arg with its
+ * single optional argument. Returns 0 only when the file really does
+ * begin with #! and names an absolute interpreter. */
+static int shebang_of(const char *path, char *interp, size_t isz,
+                      char *arg, size_t asz)
+{
+    char line[PATH_MAX + 2];
+    char *p, *e;
+    FILE *f;
+
+    if (interp && isz) interp[0] = 0;
+    if (arg && asz) arg[0] = 0;
+
+    f = fopen(path, "r");
+    if (!f) return -1;
+    if (!fgets(line, sizeof(line), f)) { fclose(f); return -1; }
+    fclose(f);
+
+    if (line[0] != '#' || line[1] != '!') return -1;
+
+    p = line + 2;
+    while (*p == ' ' || *p == '\t') p++;
+    e = p;
+    while (*e && *e != ' ' && *e != '\t' && *e != '\n' && *e != '\r') e++;
+    if (*e) { *e = 0; e++; }
+    if (*p != '/') return -1;
+    snprintf(interp, isz, "%s", p);
+
+    while (*e == ' ' || *e == '\t') e++;
+    p = e;
+    while (*e && *e != ' ' && *e != '\t' && *e != '\n' && *e != '\r') e++;
+    *e = 0;
+    if (arg && asz && *p) snprintf(arg, asz, "%s", p);
+    return 0;
+}
+
+/* A #! script cannot start unless the kernel may execute its
+ * interpreter too, and the interpreter is named inside the file, not
+ * on the command line. Distributions ship a great many applications
+ * as a small shell wrapper around the real binary - librewolf and
+ * firefox among them - so without this the very first hardened run of
+ * a perfectly ordinary application fails with EACCES on a path the
+ * user never typed and cannot see.
+ *
+ * Granting it is not a loosening of the boundary. The interpreter is
+ * provably required for the named target to execute at all, which is
+ * the definition of the minimal grant this model asks for, and it is
+ * discovered by reading the application rather than by guessing. */
+static void grant_interpreter(const char *binpath)
+{
+    char cur[PATH_MAX], interp[PATH_MAX], arg[PATH_MAX], real[PATH_MAX];
+    int depth;
+
+    snprintf(cur, sizeof(cur), "%s", binpath);
+
+    for (depth = 0; depth < 4; depth++) {
+        char *slash;
+
+        if (shebang_of(cur, interp, sizeof(interp), arg, sizeof(arg)) != 0)
+            return;
+        if (!realpath(interp, real)) return;
+        add_grant(real, OB_RX);
+
+        /* Remembered for the failure message. By the time exec fails
+         * the ruleset is already loaded and this file may no longer
+         * be readable, so what the boundary knows about the target
+         * has to be learned here, while it still can be. */
+        if (depth == 0)
+            snprintf(app_interp, sizeof(app_interp), "%s", real);
+
+        /* #!/usr/bin/env python3 hides the real interpreter in the
+         * argument and leaves env to find it on PATH. */
+        slash = strrchr(real, '/');
+        if (arg[0] && slash && strcmp(slash + 1, "env") == 0) {
+            char viaenv[PATH_MAX];
+            if (resolve_binary(arg, viaenv, sizeof(viaenv)) == 0)
+                add_grant(viaenv, OB_RX);
+        }
+
+        /* An interpreter that is itself a wrapper script is rare but
+         * it happens; follow a few links and then stop. */
+        snprintf(cur, sizeof(cur), "%s", real);
+    }
+}
+
 static void print_plan(char **argv, int sep)
 {
     int i;
@@ -1457,7 +1549,7 @@ int main(int argc, char **argv)
 {
     const char *v;
     char binpath[PATH_MAX];
-    int i, sep = -1;
+    int i, sep = -1, xerr;
 
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--") == 0) { sep = i; break; }
@@ -1529,6 +1621,7 @@ int main(int argc, char **argv)
     if (getenv("OBSIDIAN_HARDEN_NO_DEFAULTS")) cfg_defaults = 0;
     if (cfg_defaults) seed_defaults(binpath);
     grant_app_tree(binpath);
+    grant_interpreter(binpath);
 
     add_list(getenv("OBSIDIAN_ALLOW_PATHS_RO"),  OB_RO);
     add_list(getenv("OBSIDIAN_ALLOW_PATHS_RX"),  OB_RX);
@@ -1589,13 +1682,30 @@ int main(int argc, char **argv)
     }
 
     execvp(argv[sep + 1], &argv[sep + 1]);
+    xerr = errno;
     fprintf(stderr, "obsidian-harden: exec %s: %s\n",
-            argv[sep + 1], strerror(errno));
-    if (errno == EACCES)
+            argv[sep + 1], strerror(xerr));
+    if (xerr == EACCES) {
+        /* Name the path that is actually missing. The old message
+         * printed the target every time, which for a wrapper script
+         * is the one path already granted - correct-looking advice
+         * that cannot possibly work. */
         fprintf(stderr,
             "obsidian-harden: the boundary denied execution of the target "
             "itself.\n"
-            "                 Grant it with OBSIDIAN_ALLOW_EXEC=%s\n",
+            "                 %s resolves to: %s\n",
+            argv[sep + 1], binpath);
+
+        if (app_interp[0])
+            fprintf(stderr,
+            "                 that is a #! script, started by: %s\n"
+            "                 both need to be executable:\n"
+            "                   OBSIDIAN_ALLOW_EXEC=%s:%s\n",
+            app_interp, binpath, app_interp);
+        else
+            fprintf(stderr,
+            "                 grant it with OBSIDIAN_ALLOW_EXEC=%s\n",
             binpath);
+    }
     return 127;
 }

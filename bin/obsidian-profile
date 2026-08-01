@@ -101,7 +101,43 @@ build)
     mkdir -p "$USER_PROFILES" || exit 1
     OUT="$USER_PROFILES/$KEY.profile"
 
+    # Where the application really lives, and what really starts it.
+    # Both are knowable here, so neither is left for the user to work
+    # out from a permission error later. A great many distribution
+    # packages are a small shell wrapper around the real binary, and
+    # in that case the interpreter named in the #! line is as much a
+    # requirement for starting the app as the wrapper itself.
     BIN=$(command -v "$APP" 2>/dev/null || printf '%s' "$APP")
+    RBIN=$(readlink -f "$BIN" 2>/dev/null || printf '%s' "$BIN")
+    INTERP=""
+    INTERPARG=""
+    if [ -r "$RBIN" ]; then
+        FIRST=$(head -n 1 "$RBIN" 2>/dev/null)
+        case "$FIRST" in
+        "#!"*)
+            SHB=$(printf '%s' "${FIRST#\#!}" | sed 's/^[ 	]*//')
+            INTERP=$(printf '%s' "$SHB" | awk '{ print $1 }')
+            INTERPARG=$(printf '%s' "$SHB" | awk '{ print $2 }')
+            if [ -n "$INTERP" ]; then
+                INTERP=$(readlink -f "$INTERP" 2>/dev/null || printf '%s' "$INTERP")
+            fi
+            case "$INTERP" in
+            */env)
+                # env finds the real interpreter on PATH
+                if [ -n "$INTERPARG" ]; then
+                    R=$(command -v "$INTERPARG" 2>/dev/null)
+                    if [ -n "$R" ]; then
+                        INTERPARG=$(readlink -f "$R" 2>/dev/null || printf '%s' "$R")
+                    else
+                        INTERPARG=""
+                    fi
+                fi
+                ;;
+            *)  INTERPARG="" ;;
+            esac
+            ;;
+        esac
+    fi
 
     {
     printf '# Obsidian Mirror strict-boundary profile\n'
@@ -228,16 +264,26 @@ build)
         if (n == 0) printf "# (nothing beyond the base allow-list)\n"
 
         printf "\n# --- execution ---\n"
-        printf "# Each of these is a program this application started. If a\n"
+        printf "# The application itself, at the path it actually resolves\n"
+        printf "# to, and the interpreter that starts it if it is a #!\n"
+        printf "# wrapper. Without these it cannot run at all, so they are\n"
+        printf "# written in active rather than left for you to discover.\n"
+        n = 0
+        if (appbin   != "") { print "allow.exec=" appbin;   own[appbin]   = 1; n++ }
+        if (interp   != "") { print "allow.exec=" interp;   own[interp]   = 1; n++ }
+        if (interparg != "") { print "allow.exec=" interparg; own[interparg] = 1; n++ }
+        printf "#\n"
+        printf "# Below: other programs this application started. If a\n"
         printf "# shell or an interpreter appears here, decide whether it is\n"
         printf "# really needed before leaving the line in place.\n"
-        n = 0
+        m = 0
         for (p in exec_seen) {
+            if (p in own) continue
             if (p ~ /\/(sh|bash|dash|zsh|python[0-9.]*|perl|node|ruby|php|lua|tclsh|awk|env)$/)
                 printf "# REVIEW - interpreter: allow.exec=%s\n", p
-            else { print "allow.exec=" p; n++ }
+            else { print "allow.exec=" p; n++; m++ }
         }
-        if (n == 0) printf "# (nothing beyond the base allow-list)\n"
+        if (m == 0) printf "# (nothing beyond the above)\n"
 
         printf "\n# --- network ---\n"
         n = 0
@@ -248,7 +294,8 @@ build)
             printf "# it turns out to need one.\n"
         }
     }
-    ' home="$HOME" runtime="$XDG_RUNTIME_DIR" "$LOG"
+    ' home="$HOME" runtime="$XDG_RUNTIME_DIR" \
+      appbin="$RBIN" interp="$INTERP" interparg="$INTERPARG" "$LOG"
 
     printf '\n# --- options ---\n'
     printf '# opt.scope_ipc=1     confine abstract unix sockets and signals\n'
@@ -264,6 +311,15 @@ build)
     echo
     grep -c '^allow\.' "$OUT" | sed 's/^/  grants: /'
     grep -c '^# REVIEW' "$OUT" | sed 's/^/  lines needing your decision: /'
+    echo
+    echo "The application resolves to:"
+    echo "  $RBIN"
+    if [ -n "$INTERP" ]; then
+        echo "and it is started by its interpreter:"
+        echo "  $INTERP"
+        [ -n "$INTERPARG" ] && echo "  $INTERPARG"
+        echo "(both are already granted in the profile above)"
+    fi
     echo
     echo "Read it, delete anything the application does not deserve, then:"
     echo "  OBSIDIAN_HARDEN=1 obsidian $APP"

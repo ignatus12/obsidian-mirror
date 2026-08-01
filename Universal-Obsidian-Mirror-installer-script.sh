@@ -1478,12 +1478,15 @@ static int ll_add_path(int ruleset_fd, const char *path, enum ob_kind kind)
 
     if (stat(path, &st) != 0) return 0;      /* absent here: nothing to grant */
 
-    fd = open(path, O_PATH | O_CLOEXEC | O_NOFOLLOW);
-    if (fd < 0) {
-        /* O_NOFOLLOW on a symlink: resolve it and grant the target */
-        fd = open(path, O_PATH | O_CLOEXEC);
-        if (fd < 0) { rules_skipped++; return 0; }
-    }
+    /* Symlinks are followed deliberately. O_PATH|O_NOFOLLOW does not
+     * fail on a symlink, it succeeds and hands back the link itself,
+     * and a rule attached to a symlink inode governs nothing - so
+     * granting /bin on a distribution where /bin -> usr/bin used to
+     * be accepted, counted, and silently worthless. stat() above
+     * already followed the link to decide the rights, so following it
+     * here is also the only way the two agree. */
+    fd = open(path, O_PATH | O_CLOEXEC);
+    if (fd < 0) { rules_skipped++; return 0; }
 
     pb.allowed_access = rights_for(kind, S_ISDIR(st.st_mode));
     pb.parent_fd = fd;
@@ -2426,6 +2429,95 @@ static void grant_app_tree(const char *binpath)
     add_grant(dir, OB_RX);
 }
 
+/* The interpreter of a #! target, discovered before the ruleset is
+ * loaded and kept for the failure message. */
+static char app_interp[PATH_MAX];
+
+/* Read a #! line. Fills interp with the interpreter and arg with its
+ * single optional argument. Returns 0 only when the file really does
+ * begin with #! and names an absolute interpreter. */
+static int shebang_of(const char *path, char *interp, size_t isz,
+                      char *arg, size_t asz)
+{
+    char line[PATH_MAX + 2];
+    char *p, *e;
+    FILE *f;
+
+    if (interp && isz) interp[0] = 0;
+    if (arg && asz) arg[0] = 0;
+
+    f = fopen(path, "r");
+    if (!f) return -1;
+    if (!fgets(line, sizeof(line), f)) { fclose(f); return -1; }
+    fclose(f);
+
+    if (line[0] != '#' || line[1] != '!') return -1;
+
+    p = line + 2;
+    while (*p == ' ' || *p == '\t') p++;
+    e = p;
+    while (*e && *e != ' ' && *e != '\t' && *e != '\n' && *e != '\r') e++;
+    if (*e) { *e = 0; e++; }
+    if (*p != '/') return -1;
+    snprintf(interp, isz, "%s", p);
+
+    while (*e == ' ' || *e == '\t') e++;
+    p = e;
+    while (*e && *e != ' ' && *e != '\t' && *e != '\n' && *e != '\r') e++;
+    *e = 0;
+    if (arg && asz && *p) snprintf(arg, asz, "%s", p);
+    return 0;
+}
+
+/* A #! script cannot start unless the kernel may execute its
+ * interpreter too, and the interpreter is named inside the file, not
+ * on the command line. Distributions ship a great many applications
+ * as a small shell wrapper around the real binary - librewolf and
+ * firefox among them - so without this the very first hardened run of
+ * a perfectly ordinary application fails with EACCES on a path the
+ * user never typed and cannot see.
+ *
+ * Granting it is not a loosening of the boundary. The interpreter is
+ * provably required for the named target to execute at all, which is
+ * the definition of the minimal grant this model asks for, and it is
+ * discovered by reading the application rather than by guessing. */
+static void grant_interpreter(const char *binpath)
+{
+    char cur[PATH_MAX], interp[PATH_MAX], arg[PATH_MAX], real[PATH_MAX];
+    int depth;
+
+    snprintf(cur, sizeof(cur), "%s", binpath);
+
+    for (depth = 0; depth < 4; depth++) {
+        char *slash;
+
+        if (shebang_of(cur, interp, sizeof(interp), arg, sizeof(arg)) != 0)
+            return;
+        if (!realpath(interp, real)) return;
+        add_grant(real, OB_RX);
+
+        /* Remembered for the failure message. By the time exec fails
+         * the ruleset is already loaded and this file may no longer
+         * be readable, so what the boundary knows about the target
+         * has to be learned here, while it still can be. */
+        if (depth == 0)
+            snprintf(app_interp, sizeof(app_interp), "%s", real);
+
+        /* #!/usr/bin/env python3 hides the real interpreter in the
+         * argument and leaves env to find it on PATH. */
+        slash = strrchr(real, '/');
+        if (arg[0] && slash && strcmp(slash + 1, "env") == 0) {
+            char viaenv[PATH_MAX];
+            if (resolve_binary(arg, viaenv, sizeof(viaenv)) == 0)
+                add_grant(viaenv, OB_RX);
+        }
+
+        /* An interpreter that is itself a wrapper script is rare but
+         * it happens; follow a few links and then stop. */
+        snprintf(cur, sizeof(cur), "%s", real);
+    }
+}
+
 static void print_plan(char **argv, int sep)
 {
     int i;
@@ -2472,7 +2564,7 @@ int main(int argc, char **argv)
 {
     const char *v;
     char binpath[PATH_MAX];
-    int i, sep = -1;
+    int i, sep = -1, xerr;
 
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--") == 0) { sep = i; break; }
@@ -2544,6 +2636,7 @@ int main(int argc, char **argv)
     if (getenv("OBSIDIAN_HARDEN_NO_DEFAULTS")) cfg_defaults = 0;
     if (cfg_defaults) seed_defaults(binpath);
     grant_app_tree(binpath);
+    grant_interpreter(binpath);
 
     add_list(getenv("OBSIDIAN_ALLOW_PATHS_RO"),  OB_RO);
     add_list(getenv("OBSIDIAN_ALLOW_PATHS_RX"),  OB_RX);
@@ -2604,14 +2697,31 @@ int main(int argc, char **argv)
     }
 
     execvp(argv[sep + 1], &argv[sep + 1]);
+    xerr = errno;
     fprintf(stderr, "obsidian-harden: exec %s: %s\n",
-            argv[sep + 1], strerror(errno));
-    if (errno == EACCES)
+            argv[sep + 1], strerror(xerr));
+    if (xerr == EACCES) {
+        /* Name the path that is actually missing. The old message
+         * printed the target every time, which for a wrapper script
+         * is the one path already granted - correct-looking advice
+         * that cannot possibly work. */
         fprintf(stderr,
             "obsidian-harden: the boundary denied execution of the target "
             "itself.\n"
-            "                 Grant it with OBSIDIAN_ALLOW_EXEC=%s\n",
+            "                 %s resolves to: %s\n",
+            argv[sep + 1], binpath);
+
+        if (app_interp[0])
+            fprintf(stderr,
+            "                 that is a #! script, started by: %s\n"
+            "                 both need to be executable:\n"
+            "                   OBSIDIAN_ALLOW_EXEC=%s:%s\n",
+            app_interp, binpath, app_interp);
+        else
+            fprintf(stderr,
+            "                 grant it with OBSIDIAN_ALLOW_EXEC=%s\n",
             binpath);
+    }
     return 127;
 }
 OBSIDIAN_PAYLOAD_HARDEN_C
@@ -5511,7 +5621,43 @@ build)
     mkdir -p "$USER_PROFILES" || exit 1
     OUT="$USER_PROFILES/$KEY.profile"
 
+    # Where the application really lives, and what really starts it.
+    # Both are knowable here, so neither is left for the user to work
+    # out from a permission error later. A great many distribution
+    # packages are a small shell wrapper around the real binary, and
+    # in that case the interpreter named in the #! line is as much a
+    # requirement for starting the app as the wrapper itself.
     BIN=$(command -v "$APP" 2>/dev/null || printf '%s' "$APP")
+    RBIN=$(readlink -f "$BIN" 2>/dev/null || printf '%s' "$BIN")
+    INTERP=""
+    INTERPARG=""
+    if [ -r "$RBIN" ]; then
+        FIRST=$(head -n 1 "$RBIN" 2>/dev/null)
+        case "$FIRST" in
+        "#!"*)
+            SHB=$(printf '%s' "${FIRST#\#!}" | sed 's/^[ 	]*//')
+            INTERP=$(printf '%s' "$SHB" | awk '{ print $1 }')
+            INTERPARG=$(printf '%s' "$SHB" | awk '{ print $2 }')
+            if [ -n "$INTERP" ]; then
+                INTERP=$(readlink -f "$INTERP" 2>/dev/null || printf '%s' "$INTERP")
+            fi
+            case "$INTERP" in
+            */env)
+                # env finds the real interpreter on PATH
+                if [ -n "$INTERPARG" ]; then
+                    R=$(command -v "$INTERPARG" 2>/dev/null)
+                    if [ -n "$R" ]; then
+                        INTERPARG=$(readlink -f "$R" 2>/dev/null || printf '%s' "$R")
+                    else
+                        INTERPARG=""
+                    fi
+                fi
+                ;;
+            *)  INTERPARG="" ;;
+            esac
+            ;;
+        esac
+    fi
 
     {
     printf '# Obsidian Mirror strict-boundary profile\n'
@@ -5638,16 +5784,26 @@ build)
         if (n == 0) printf "# (nothing beyond the base allow-list)\n"
 
         printf "\n# --- execution ---\n"
-        printf "# Each of these is a program this application started. If a\n"
+        printf "# The application itself, at the path it actually resolves\n"
+        printf "# to, and the interpreter that starts it if it is a #!\n"
+        printf "# wrapper. Without these it cannot run at all, so they are\n"
+        printf "# written in active rather than left for you to discover.\n"
+        n = 0
+        if (appbin   != "") { print "allow.exec=" appbin;   own[appbin]   = 1; n++ }
+        if (interp   != "") { print "allow.exec=" interp;   own[interp]   = 1; n++ }
+        if (interparg != "") { print "allow.exec=" interparg; own[interparg] = 1; n++ }
+        printf "#\n"
+        printf "# Below: other programs this application started. If a\n"
         printf "# shell or an interpreter appears here, decide whether it is\n"
         printf "# really needed before leaving the line in place.\n"
-        n = 0
+        m = 0
         for (p in exec_seen) {
+            if (p in own) continue
             if (p ~ /\/(sh|bash|dash|zsh|python[0-9.]*|perl|node|ruby|php|lua|tclsh|awk|env)$/)
                 printf "# REVIEW - interpreter: allow.exec=%s\n", p
-            else { print "allow.exec=" p; n++ }
+            else { print "allow.exec=" p; n++; m++ }
         }
-        if (n == 0) printf "# (nothing beyond the base allow-list)\n"
+        if (m == 0) printf "# (nothing beyond the above)\n"
 
         printf "\n# --- network ---\n"
         n = 0
@@ -5658,7 +5814,8 @@ build)
             printf "# it turns out to need one.\n"
         }
     }
-    ' home="$HOME" runtime="$XDG_RUNTIME_DIR" "$LOG"
+    ' home="$HOME" runtime="$XDG_RUNTIME_DIR" \
+      appbin="$RBIN" interp="$INTERP" interparg="$INTERPARG" "$LOG"
 
     printf '\n# --- options ---\n'
     printf '# opt.scope_ipc=1     confine abstract unix sockets and signals\n'
@@ -5674,6 +5831,15 @@ build)
     echo
     grep -c '^allow\.' "$OUT" | sed 's/^/  grants: /'
     grep -c '^# REVIEW' "$OUT" | sed 's/^/  lines needing your decision: /'
+    echo
+    echo "The application resolves to:"
+    echo "  $RBIN"
+    if [ -n "$INTERP" ]; then
+        echo "and it is started by its interpreter:"
+        echo "  $INTERP"
+        [ -n "$INTERPARG" ] && echo "  $INTERPARG"
+        echo "(both are already granted in the profile above)"
+    fi
     echo
     echo "Read it, delete anything the application does not deserve, then:"
     echo "  OBSIDIAN_HARDEN=1 obsidian $APP"

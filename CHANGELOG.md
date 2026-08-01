@@ -6,6 +6,47 @@ your own machine with the command named next to it.
 
 ---
 
+## Strict boundary: correct denied-path message + wrapper launch support
+
+### Fixed
+
+- **The execution-denied message named the wrong path.** When the
+  boundary refused to run a `#!` wrapper (LibreWolf, Firefox and many
+  others ship as a shell wrapper around the real binary), the advice
+  printed the wrapper's own path -- which was already granted, so
+  following it could not work and pointed at nothing the user had typed.
+  The message now names the *resolved* binary (`binpath`, what
+  `command -v` + `readlink -f` actually resolve to) and, for a script,
+  its interpreter; the `build` step writes both paths into the profile
+  as active `allow.exec=` lines, so the hardened run shows the same
+  correct path the `learn` step recorded.
+- **Wrapper applications failed on the first hardened run even when
+  correctly profiled.** A `#!` script needs its interpreter executable
+  too, but the interpreter is named *inside the file*, not on the command
+  line, so the kernel denied it on a path the user never saw. The
+  enforcer now discovers and grants the interpreter before the ruleset
+  loads -- following `/usr/bin/env` to its real binary and a few wrapper
+  links. This is the minimal grant the model asks for: it is *read from
+  the application*, not guessed, and it is provably required for the
+  named target to start at all.
+- **`OBSIDIAN_ALLOW_PATHS_RX` on a symlink directory silently did
+  nothing.** `ll_add_path` opened the path with `O_NOFOLLOW`, which does
+  not fail on a symlink -- it binds the rule to the link inode, which
+  governs nothing. It now follows the link, so a grant on `/bin` (where
+  `/bin -> usr/bin`) actually covers what lives beneath it.
+
+### Measured
+
+- `obsidian --profile learn fakewolf` -> `build` -> `OBSIDIAN_HARDEN=1
+  obsidian fakewolf` runs the app. The denied case now reports
+  `resolves to: /usr/bin/fakewolf` / `started by: /usr/bin/dash` /
+  `OBSIDIAN_ALLOW_EXEC=/usr/bin/fakewolf:/usr/bin/dash`, and that exact
+  value runs it.
+- `tools/verify-installer.sh`: 24 passed, 0 failed; the launcher's
+  middle `sh -c` still carries zero single quotes.
+
+---
+
 ## The strict boundary release
 
 The project used to answer one question: **what can an application

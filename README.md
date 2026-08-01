@@ -29,7 +29,7 @@ obsidian firefox     # same Firefox. different computer, as far as it can tell.
 
 | | What it stops | Status | Measured right now |
 |---|---|---|---|
-| 🪞 **The Mirror** | what an app can **learn** about your machine | **on by default** | **68 of 74** identity checks faked — **91%** |
+| 🪞 **The Mirror** | what an app can **learn** about your machine | **on by default** | **~9 of every 10** identity checks faked — 64–68 of 74, a new draw each launch |
 | 🔒 **The Boundary** | what an app can **do** to your machine | **off** until you ask | **29** ways in shut, **1** still open, **0** apps broken |
 
 The Boundary is off by default on purpose: nothing you already run
@@ -58,7 +58,7 @@ Every number above prints on *your* machine, from *your* hardware, in
 under a minute. Nothing here is hand-typed:
 
 ```sh
-obsidian --test          # the 91%: what got faked, what leaked
+obsidian --test          # the ~90%: what got faked, what leaked
 obsidian --harden-test   # the 29 / 1 / 0: every attempt, tried twice
 obsidian --coverage      # what is NOT covered, and why
 ```
@@ -273,7 +273,7 @@ including every known compatibility cost, is in
 - **The DMI/TPM/EDID/battery gap.** This was measured on a headless VM with no DMI table, TPM, battery, or GPU, so those identifiers read `(none)` on all four environments and are excluded from the counts. The probe already measures those keys; we just need someone with real hardware to run it. **PRs welcome** — if you contribute probe data, redact `id.machine_id` / `dmi.*` / `net.mac_addresses` / `bt.addresses` / `net.resolv_conf` first (GitHub issues are public).
 - **Network layer is out of scope by design.** No traffic routing, no IP hiding. (The strict boundary can deny an application the network entirely, which is a different thing from hiding traffic.)
 - **The strict boundary is not a solved problem either.** It closes 29 measured surfaces and breaks nothing in the positive-control set, but **one measured surface stays open** (an app loading a library it wrote itself), side channels and sub-kernel silicon are outside what any kernel policy can reach, and a surface nobody has probed is not a surface anybody has closed. Three of the ten layers fall short of the model in some way; all three are named in [`docs/CONFORMANCE.md`](docs/CONFORMANCE.md) rather than left for you to discover.
-- **Numbers vary by machine.** The 91% is 68 of 74 checks on the development box; the boundary figures are from Landlock ABI 2 there. Your hardware and kernel will produce different totals — that is why every figure has a command next to it instead of a footnote.
+- **Numbers vary between launches, not just between machines.** The identity is redrawn every time you start an app, so `--test` does not print one fixed figure. Twelve consecutive runs on the development box gave 68/74 six times, 67/74 twice and 64/74 four times — **86% to 91%**. The low draws are the documented case where a randomly chosen OS profile happens to match the real host. The boundary figures are from Landlock ABI 2 on that box; your kernel is likely newer and will enforce more. That is why every figure here has a command next to it instead of a footnote.
 
 ---
 

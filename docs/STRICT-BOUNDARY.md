@@ -12,9 +12,9 @@ not and cannot do.
 
 It is **off by default.** Nothing in this document happens unless
 `OBSIDIAN_HARDEN` is set. With it unset, `obsidian <application>` is the
-same launcher that produced the metadata result (91% of 74 checks on
-this box, and it varies by host), byte for byte, and
-the installer's self-test checks that claim rather than asserting it.
+same launcher that produced the metadata result (64 to 68 of 74 checks
+on this box, redrawn every launch), byte for byte, and the installer's
+self-test checks that claim rather than asserting it.
 
 ---
 

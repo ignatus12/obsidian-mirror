@@ -44,7 +44,8 @@ that already worked changes.
 | present but unreachable | 2 |
 | inconclusive on this machine | 1 |
 
-`obsidian --test` is unchanged at 68 of 74 checks (91%), and the
+`obsidian --test` is unchanged: 64 to 68 of 74 checks (86% to 91%,
+redrawn each launch), and the
 installer self-test verifies that the default path still behaves exactly
 as it did.
 

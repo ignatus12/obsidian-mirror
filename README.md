@@ -90,9 +90,70 @@ sudo sh Universal-Obsidian-installer-script.sh
 obsidian firefox
 obsidian --test        # show what is protected vs leaked
 obsidian --audit       # full protected / leaked / not-protected report
+obsidian --harden-test # measure the strict boundary (opt-in, see below)
 ```
 
 See [`docs/COVERAGE.md`](docs/COVERAGE.md) for exactly what is covered and what is *honestly* not, and how every number above was produced (reproducible from `evidence/` by `compare.py`).
+
+---
+
+## The second layer: the strict boundary
+
+Everything above is about what an application can *learn*. That is one
+half of the problem. The other half is what an application can *do* —
+and wrapping an app in a box that "allows these things and denies those
+things" is a list, not a boundary.
+
+The strict boundary is the other discipline, applied to the same
+machine:
+
+> **Default-deny at every layer, allow only a minimal per-application
+> grant.** Not "deny these specific paths." Deny everything; permit only
+> what the app provably needs.
+
+| Layer | Default | Allowed |
+|---|---|---|
+| Filesystem | deny ALL host paths | the app's own data dir + granted paths |
+| Memory | its own address space only | no `ptrace`, no peer `/proc/PID/mem`, no `/dev/mem`, no `/proc/kcore` |
+| Network | deny all | a granted port, or none |
+| Devices | deny all | only what is needed; hard-deny `/dev/mem`, `/dev/sd*`, `/dev/nvme*` |
+| IPC | deny all | only the needed sockets |
+| Execution | the app binary + legitimate JIT | no shell, no `python -c`, no `node -e`, no memfd exec |
+| Capabilities | drop all | none |
+| Privilege | `NoNewPrivs` | none |
+| Namespaces | deny `unshare`/`mount` | none |
+
+**It is off by default**, and the installer's self-test verifies that
+`obsidian <app>` with hardening unset behaves identically to before.
+
+```sh
+obsidian --harden-test               # measure what it closes, on your machine
+obsidian --profile learn firefox     # run it, record what it actually needs
+obsidian --profile build firefox     # collapse that into a minimal allow-list
+OBSIDIAN_HARDEN=1 obsidian firefox   # run it inside the boundary
+```
+
+Measured on the development machine — same probe, same launcher, run
+twice, once with the boundary and once without:
+
+| | |
+|---|---|
+| surfaces the boundary closed | **29** |
+| surfaces already shut by the base launcher | 18 |
+| surfaces still open under the boundary | **0** |
+| application capabilities broken | **0** |
+
+The enumeration is not there to list denials. It is there to **discover
+what the application legitimately needs**, grant exactly that, and deny
+the rest — the same method that produced the 93% metadata figure without
+breaking applications.
+
+It does **not** close side channels (cache timing, power, acoustic,
+electromagnetic) and it cannot reach below the kernel, which includes the
+management engine on your own processor. Those are not kernel-policy
+problems and this does not pretend to solve them. The full account,
+including every known compatibility cost, is in
+[`docs/STRICT-BOUNDARY.md`](docs/STRICT-BOUNDARY.md).
 
 ---
 
@@ -101,7 +162,8 @@ See [`docs/COVERAGE.md`](docs/COVERAGE.md) for exactly what is covered and what 
 - **This is not anonymity.** It reduces *device* fingerprinting by local apps. It does not hide your traffic, your accounts, or your behavior. Use it **with** a VPN/Tor, not instead of one.
 - **VPN / Tor are still necessary.** They stop your ISP and the local network from reading your traffic and hide your origin from servers. Obsidian Mirror is the layer they *don't* provide.
 - **The DMI/TPM/EDID/battery gap.** This was measured on a headless VM with no DMI table, TPM, battery, or GPU, so those identifiers read `(none)` on all four environments and are excluded from the counts. The probe already measures those keys; we just need someone with real hardware to run it. **PRs welcome** — if you contribute probe data, redact `id.machine_id` / `dmi.*` / `net.mac_addresses` / `bt.addresses` / `net.resolv_conf` first (GitHub issues are public).
-- **Network layer is out of scope by design.** No traffic routing, no IP hiding.
+- **Network layer is out of scope by design.** No traffic routing, no IP hiding. (The strict boundary can deny an application the network entirely, which is a different thing from hiding traffic.)
+- **The strict boundary is not a solved problem either.** It closes 29 measured surfaces and breaks nothing in the positive-control set, but side channels and sub-kernel silicon are outside what any kernel policy can reach, and a surface nobody has probed is not a surface anybody has closed.
 
 ---
 
@@ -110,6 +172,7 @@ See [`docs/COVERAGE.md`](docs/COVERAGE.md) for exactly what is covered and what 
 - The deep dive on *why* VPN/Tor/Tor Browser don't close this vector, with the full fair comparison: [`docs/METADATA-VS-POPULAR-PRIVACY-TOOLS.md`](docs/METADATA-VS-POPULAR-PRIVACY-TOOLS.md)
 - The measured Flatpak ledger: [`docs/FLATPAK-COMPARISON.md`](docs/FLATPAK-COMPARISON.md)
 - Coverage & limits: [`docs/COVERAGE.md`](docs/COVERAGE.md)
+- The strict boundary, layer by layer, measured: [`docs/STRICT-BOUNDARY.md`](docs/STRICT-BOUNDARY.md)
 - Raw data + the probe + the analysis: [`evidence/`](evidence/)
 
 ---

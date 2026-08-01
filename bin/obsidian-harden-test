@@ -1,0 +1,269 @@
+#!/bin/sh
+# ============================================================
+# /opt/obsidian/bin/obsidian-harden-test
+# Obsidian Mirror - strict boundary, measured.
+#
+# Runs the same probe twice through the same launcher: once as
+# the launcher runs today, once with OBSIDIAN_HARDEN=1. Prints
+# what each attempt actually got back from the kernel.
+#
+# It does not report what the policy intends. It reports what
+# the kernel did. Where those two disagree, the kernel is right
+# and the documentation is wrong.
+# ============================================================
+
+OBSIDIAN_DIR="${OBSIDIAN_DIR:-/opt/obsidian}"
+LAUNCH="$OBSIDIAN_DIR/bin/obsidian-launch"
+PROBE="$OBSIDIAN_DIR/bin/obsidian-hardenprobe"
+HARDEN="$OBSIDIAN_DIR/bin/obsidian-harden"
+
+C_B=""; C_0=""; C_G=""; C_R=""; C_Y=""
+if [ -t 1 ] && [ -z "$NO_COLOR" ]; then
+    C_B=$(printf '\033[1m'); C_0=$(printf '\033[0m')
+    C_G=$(printf '\033[32m'); C_R=$(printf '\033[31m')
+    C_Y=$(printf '\033[33m')
+fi
+
+if [ ! -x "$PROBE" ]; then
+    echo "ERROR: $PROBE is not installed."
+    echo "       Re-run the Obsidian installer to build the probe."
+    exit 1
+fi
+if [ ! -x "$HARDEN" ]; then
+    echo "ERROR: $HARDEN is not installed."
+    echo "       Re-run the Obsidian installer to build the enforcer."
+    exit 1
+fi
+
+WORK="${TMPDIR:-/tmp}/obsidian-harden-test.$$"
+mkdir -p "$WORK" || { echo "ERROR: cannot create $WORK"; exit 1; }
+trap 'rm -rf "$WORK"' EXIT INT TERM
+
+printf '\n%s' "$C_B"
+printf -- '=====================================================================\n'
+printf ' OBSIDIAN MIRROR - STRICT BOUNDARY, MEASURED\n'
+printf -- '=====================================================================%s\n' "$C_0"
+printf '\n'
+printf ' Host      : %s\n' "$(uname -srm 2>/dev/null)"
+printf ' Landlock  : '
+LLABI=$("$HARDEN" --print-plan -- /bin/true 2>&1 | sed -n 's/.*landlock ABI  : //p' | head -1)
+if [ -n "$LLABI" ] && [ "$LLABI" != "0" ] && [ "$LLABI" != "-1" ]; then
+    printf 'ABI %s\n' "$LLABI"
+else
+    printf '%sNOT AVAILABLE - filesystem confinement cannot load%s\n' "$C_R" "$C_0"
+fi
+printf ' Date      : %s\n' "$(date -u '+%Y-%m-%d %H:%M UTC' 2>/dev/null)"
+printf '\n'
+
+# ---- run 1: the launcher exactly as it behaves today -----------------
+printf ' running baseline (launcher as shipped) ... '
+OBSIDIAN_HARDEN= "$LAUNCH" "$PROBE" --quiet \
+    >"$WORK/base.tsv" 2>"$WORK/base.err"
+BASE_RC=$?
+printf '%s records\n' "$(wc -l < "$WORK/base.tsv" 2>/dev/null | tr -d ' ')"
+
+# ---- run 2: the same launcher with the boundary on -------------------
+printf ' running hardened (OBSIDIAN_HARDEN=1)   ... '
+OBSIDIAN_HARDEN=1 \
+    "$LAUNCH" "$PROBE" --quiet >"$WORK/hard.tsv" 2>"$WORK/hard.err"
+HARD_RC=$?
+printf '%s records\n' "$(wc -l < "$WORK/hard.tsv" 2>/dev/null | tr -d ' ')"
+
+if [ ! -s "$WORK/base.tsv" ]; then
+    printf '\n%sERROR%s: the baseline run produced nothing (exit %s).\n' \
+           "$C_R" "$C_0" "$BASE_RC"
+    sed 's/^/        /' "$WORK/base.err" | head -20
+    exit 1
+fi
+if [ ! -s "$WORK/hard.tsv" ]; then
+    printf '\n%sERROR%s: the hardened run produced nothing (exit %s).\n' \
+           "$C_R" "$C_0" "$HARD_RC"
+    sed 's/^/        /' "$WORK/hard.err" | head -20
+    printf '\n Nothing is enforced by default, so the launcher is unaffected.\n'
+    exit 1
+fi
+
+awk -F'\t' -v cg="$C_G" -v cr="$C_R" -v cy="$C_Y" -v c0="$C_0" -v cb="$C_B" '
+BEGIN {
+    # Surfaces an application legitimately needs. If the boundary
+    # closes one of these it has broken the application, and that is
+    # a failure of this project, not a success.
+    control["jit.anon_exec"]     = 1
+    control["fs.write.home"]     = 1
+    control["fs.write.tmp"]      = 1
+    control["fs.read.own_libs"]  = 1
+    control["fs.read.urandom"]   = 1
+    control["net.socket_unix"]   = 1
+
+    label["fs.read.shadow"]      = "read the password hashes"
+    label["fs.read.sshkeys"]     = "read the host SSH keys"
+    label["fs.read.roothome"]    = "read the root account home"
+    label["fs.read.varlog"]      = "read every system log"
+    label["fs.read.boot"]        = "read the kernel and initramfs"
+    label["fs.read.kcore"]       = "read kernel memory through /proc/kcore"
+    label["fs.read.kallsyms"]    = "read the kernel symbol table"
+    label["fs.read.devmem"]      = "read physical memory via /dev/mem"
+    label["fs.read.devkmsg"]     = "read the kernel log device"
+    label["fs.read.iomem"]       = "map the physical memory layout"
+    label["fs.read.modules"]     = "enumerate loaded kernel modules"
+    label["fs.read.debugfs"]     = "read debugfs"
+    label["fs.read.rawdisk"]     = "read the raw disk device"
+    label["fs.write.sysrq"]      = "trigger a kernel sysrq"
+    label["fs.write.etc"]        = "write into /etc"
+    label["fs.write.usr"]        = "write into /usr"
+    label["fs.read.own_libs"]    = "read its own shared libraries"
+    label["fs.read.urandom"]     = "read /dev/urandom"
+    label["fs.write.home"]       = "write in its own home"
+    label["fs.write.tmp"]        = "write in /tmp"
+    label["exec.shell"]          = "spawn a shell"
+    label["exec.python"]         = "spawn a python interpreter"
+    label["exec.node"]           = "spawn a node interpreter"
+    label["exec.perl"]           = "spawn a perl interpreter"
+    label["exec.memfd"]          = "execute code that has no file"
+    label["jit.anon_exec"]       = "JIT-compile in anonymous memory"
+    label["mem.ptrace"]          = "attach a debugger to another process"
+    label["mem.process_vm_readv"]  = "read another process memory"
+    label["mem.process_vm_writev"] = "write another process memory"
+    label["mem.peer_mem"]        = "open /proc/PID/mem of a peer"
+    label["mem.userfaultfd"]     = "take over page faults"
+    label["mem.perf_event_open"] = "open a performance counter"
+    label["mem.pidfd_getfd"]     = "steal a descriptor from a peer"
+    label["mem.kcmp"]            = "correlate processes with kcmp"
+    label["log.kernel_ring"]     = "read the kernel ring buffer"
+    label["kern.init_module"]    = "load a kernel module"
+    label["kern.bpf"]            = "load a BPF program"
+    label["kern.io_uring"]       = "open an io_uring ring"
+    label["hw.iopl"]             = "take direct hardware port I/O"
+    label["key.keyctl"]          = "reach the kernel keyring"
+    label["time.clock_settime"]  = "set the system clock"
+    label["ns.unshare_user"]     = "create a user namespace"
+    label["ns.mount"]            = "mount a filesystem"
+    label["ns.setns"]            = "enter another namespace"
+    label["ns.open_by_handle"]   = "open a file by handle"
+    label["net.socket_inet"]     = "open an IPv4 socket"
+    label["net.socket_inet6"]    = "open an IPv6 socket"
+    label["net.socket_netlink"]  = "query the kernel over netlink"
+    label["net.socket_packet"]   = "open a raw packet socket"
+    label["net.socket_unix"]     = "open a unix socket (display server)"
+    label["net.connect_tcp"]     = "reach a routable address"
+    label["priv.no_new_privs"]   = "regain privilege through setuid"
+    label["priv.seccomp_mode"]   = "run without a syscall filter"
+    label["cap.sys_admin_bounding"] = "hold CAP_SYS_ADMIN in the bounding set"
+    label["cap.chown_bounding"]  = "hold CAP_CHOWN in the bounding set"
+    label["cap.effective_set"]   = "hold any effective capability"
+}
+NR == FNR { base[$1] = $2; based[$1] = $3; order[++n] = $1; next }
+{ hard[$1] = $2; hardd[$1] = $3 }
+END {
+    printf "\n%s SECTION 1  What the boundary closed%s\n", cb, c0
+    printf " %s\n", "-------------------------------------------------------------------"
+    printf " %-34s %-12s %-12s %s\n", "ATTEMPT", "AS SHIPPED", "HARDENED", ""
+    printf " %s\n", "-------------------------------------------------------------------"
+
+    closed = 0; stillopen = 0; already = 0; broke = 0; incon = 0
+    unreach = 0
+
+    # A capability left in the bounding set is only worth anything to a
+    # process that can put it into its effective set. With no effective
+    # capability and no_new_privs set there is no path back to one, so
+    # calling that "open" would be counting a door in a wall.
+    caps_dead = (hard["cap.effective_set"] == "DENIED" &&
+                 hard["priv.no_new_privs"] == "DENIED")
+
+    for (i = 1; i <= n; i++) {
+        k = order[i]
+        b = base[k]; h = hard[k]
+        if (h == "") h = "MISSING"
+        desc = (k in label) ? label[k] : k
+
+        if (k in control) continue
+
+        if (caps_dead && (k == "cap.sys_admin_bounding" ||
+                          k == "cap.chown_bounding")) {
+            v = cy "unreachable *" c0; unreach++
+        } else if (b == "ALLOWED" && (h == "DENIED" || h == "KILLED")) {
+            v = cg "CLOSED" c0; closed++
+        } else if (b == "ALLOWED" && h == "ALLOWED") {
+            v = cr "STILL OPEN" c0; stillopen++
+        } else if ((b == "DENIED" || b == "KILLED") &&
+                   (h == "DENIED" || h == "KILLED")) {
+            v = "already shut"; already++
+        } else if (b == "ABSENT" && (h == "DENIED" || h == "KILLED")) {
+            v = "shut, absent here"; already++
+        } else {
+            v = cy "inconclusive" c0; incon++
+        }
+        printf " %-34s %-12s %-12s %s\n", desc, b, h, v
+    }
+
+    if (unreach > 0) {
+        printf "\n  * The bounding set could not be emptied: clearing it needs\n"
+        printf "    CAP_SETPCAP and this process holds no capability at all\n"
+        printf "    (CapEff 0) once the launcher has mapped it to an ordinary\n"
+        printf "    user. Nothing in the set is reachable from here, but it is\n"
+        printf "    reported rather than hidden.\n"
+    }
+
+    printf "\n%s SECTION 2  What the application kept (positive controls)%s\n", cb, c0
+    printf " %s\n", "-------------------------------------------------------------------"
+    printf " %-34s %-12s %-12s %s\n", "CAPABILITY THE APP NEEDS", "AS SHIPPED", "HARDENED", ""
+    printf " %s\n", "-------------------------------------------------------------------"
+    for (i = 1; i <= n; i++) {
+        k = order[i]
+        if (!(k in control)) continue
+        b = base[k]; h = hard[k]
+        desc = (k in label) ? label[k] : k
+        if (h == "ALLOWED") { v = cg "kept" c0 }
+        else if (b != "ALLOWED") { v = cy "n/a here" c0 }
+        else { v = cr "BROKEN BY THE BOUNDARY" c0; broke++ }
+        printf " %-34s %-12s %-12s %s\n", desc, b, h, v
+    }
+
+    printf "\n%s SECTION 3  Summary%s\n", cb, c0
+    printf " %s\n", "-------------------------------------------------------------------"
+    printf "  %-45s %d\n", "surfaces the boundary closed", closed
+    printf "  %-45s %d\n", "surfaces already shut by the base launcher", already
+    printf "  %-45s %s%d%s\n", "surfaces still open under the boundary", \
+           (stillopen ? cr : cg), stillopen, c0
+    printf "  %-45s %s%d%s\n", "application capabilities broken", \
+           (broke ? cr : cg), broke, c0
+    printf "  %-45s %d\n", "present but unreachable", unreach
+    printf "  %-45s %d\n", "inconclusive on this machine", incon
+    printf "\n"
+    if (broke > 0)
+        printf "  %sThe boundary broke something the application needs.%s\n  Loosen the profile before using it on a real application.\n\n", cr, c0
+}
+' "$WORK/base.tsv" "$WORK/hard.tsv"
+
+cat <<'LIMITS'
+ SECTION 4  What this does not close
+ -------------------------------------------------------------------
+  Side channels.        Cache timing, branch prediction, power draw,
+                        acoustics and electromagnetic emission are not
+                        syscalls. No kernel policy sees them, so none
+                        of them appear above and none of them are
+                        closed. This is a real, permanent gap.
+
+  Silicon below the OS. A management engine, a platform security
+                        processor or signed firmware runs underneath
+                        the kernel that enforces all of the above. A
+                        policy written in kernel objects cannot reach
+                        what the kernel itself runs on top of.
+
+  The host itself.      Everything here confines the application. It
+                        does not confine the machine's owner, or code
+                        already running as another user. That was
+                        never the boundary being drawn.
+
+  Anything not probed.  This report covers the attempts listed above
+                        and nothing else. A surface that is not
+                        measured here is not a surface that is proven
+                        closed - it is one nobody has looked at yet.
+
+LIMITS
+
+printf ' Reproduce any single line with:\n'
+printf '   %s %s --quiet | grep <key>\n' "$LAUNCH" "$PROBE"
+printf '   OBSIDIAN_HARDEN=1 %s %s --quiet | grep <key>\n\n' "$LAUNCH" "$PROBE"
+
+exit 0

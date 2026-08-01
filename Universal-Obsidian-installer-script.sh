@@ -58,8 +58,11 @@ BINDIR="$PREFIX/bin"
 LIBDIR="$PREFIX/lib"
 SRCDIR="$PREFIX/src"
 SCRIPTDIR="$PREFIX/scripts"
+VARDIR="$PREFIX/var"
+LEARNDIR="$VARDIR/learn"
 FAKEROOT="$PREFIX/fake_root"
 MANIFESTDIR="/etc/obsidian"
+PROFILEDIR="$MANIFESTDIR/profiles"
 CLI_LINK="/usr/local/bin/obsidian"
 
 DO_DEPS=1
@@ -198,9 +201,14 @@ command -v taskset >/dev/null 2>&1 && ok "taskset present" \
 step "Creating the directory tree"
 # =====================================================================
 for d in "$PREFIX" "$BINDIR" "$LIBDIR" "$SRCDIR" "$SCRIPTDIR" \
-         "$FAKEROOT" "$FAKEROOT/fonts" "$FAKEROOT/proc" "$MANIFESTDIR"; do
+         "$FAKEROOT" "$FAKEROOT/fonts" "$FAKEROOT/proc" "$MANIFESTDIR" \
+         "$VARDIR" "$LEARNDIR" "$PROFILEDIR"; do
     mkdir -p "$d"
 done
+# The learning log is written from inside the sandbox by whichever
+# unprivileged user is running an application through it, so it needs
+# the same sticky-writable treatment /tmp gets.
+chmod 1777 "$LEARNDIR"
 chmod 755 "$PREFIX" "$BINDIR" "$LIBDIR" "$SCRIPTDIR" "$FAKEROOT" "$MANIFESTDIR"
 ok "$PREFIX"
 ok "$MANIFESTDIR"
@@ -1004,6 +1012,2504 @@ int main(int argc, char **argv)
 OBSIDIAN_PAYLOAD_IPCPROBE_C
 ok "src/obsidian_ipcprobe.c"
 
+cat > "$SRCDIR/obsidian_harden.c" <<'OBSIDIAN_PAYLOAD_HARDEN_C'
+/* ============================================================
+ * /opt/obsidian/bin/obsidian-harden
+ * Obsidian Mirror - Strict Boundary enforcer.
+ *
+ *   "Deny everything; permit only what the app provably needs."
+ *
+ * This binary is the code translation of the strict-boundary
+ * model. It is OPT-IN. If OBSIDIAN_HARDEN is unset or 0 the
+ * binary immediately exec()s the target unchanged, so the
+ * existing "obsidian <application>" path is bit-for-bit the
+ * behaviour it had before this file existed.
+ *
+ * Layers, and the kernel mechanism each one is built from:
+ *
+ *   Filesystem   Landlock ruleset, default-deny. Every access
+ *                right the running kernel knows about is placed
+ *                in handled_access_fs, which denies it globally,
+ *                and then re-granted ONLY on the explicit
+ *                per-app allow-list. Nothing is enumerated as a
+ *                denial: paths not granted are simply gone.
+ *   Devices      same ruleset. /dev is never granted whole; only
+ *                the individual nodes on the allow-list. Any
+ *                grant that would expose a hard-deny node is
+ *                pruned child-by-child instead of being dropped,
+ *                so the app keeps what it needs and loses the
+ *                node it must never see.
+ *   Memory       seccomp-bpf: ptrace, process_vm_readv/writev,
+ *                kcmp, pidfd_getfd, process_madvise, userfaultfd,
+ *                perf_event_open. /dev/mem, /dev/kmem, /dev/port,
+ *                /proc/kcore are hard-deny paths in the ruleset.
+ *   Execution    Landlock EXECUTE is granted on library
+ *                directories and on the app binary only. /bin,
+ *                /usr/bin, /sbin are NOT executable, so
+ *                "sh -c", "python -c", "node -e" cannot spawn.
+ *                execveat(AT_EMPTY_PATH) is denied in seccomp,
+ *                which is the memfd-exec pattern.
+ *   Network      seccomp denies socket() for every address family
+ *                except AF_UNIX unless a grant exists; Landlock
+ *                network rules (kernel 6.7+) pin TCP connect/bind
+ *                to the granted ports.
+ *   IPC          Landlock scoping (kernel 6.12+) confines abstract
+ *                unix sockets and signals to this domain.
+ *   Namespaces   seccomp: unshare, setns, mount, umount2,
+ *                pivot_root, chroot, the new mount API, and clone
+ *                with any CLONE_NEW* flag.
+ *   Capabilities whole bounding set dropped, ambient cleared,
+ *                permitted/effective/inheritable zeroed.
+ *   Privilege    PR_SET_NO_NEW_PRIVS.
+ *   Launch state inherited file descriptors above stderr are
+ *                closed before the app is reached.
+ *
+ * What this file does NOT claim: it cannot stop a side channel
+ * (cache timing, power, EM) and it cannot see below the kernel,
+ * so management-engine class silicon is out of reach. Those are
+ * not kernel-policy problems and no amount of policy fixes them.
+ *
+ * Usage:   obsidian-harden [--print-plan] -- <command> [args...]
+ * Build:   cc -O2 -Wall -o obsidian-harden obsidian_harden.c
+ *          (no external library is required, on purpose)
+ * ============================================================ */
+
+#define _GNU_SOURCE
+#include <ctype.h>
+#include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <limits.h>
+#include <stdarg.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/prctl.h>
+#include <sys/stat.h>
+#include <sys/syscall.h>
+#include <sys/types.h>
+#include <linux/audit.h>
+#include <linux/filter.h>
+#include <linux/seccomp.h>
+
+/* ------------------------------------------------------------
+ * Kernel interface definitions.
+ *
+ * Everything below is declared locally rather than pulled from
+ * <linux/landlock.h>. The header only appeared in 5.13 and grew
+ * a third struct field in 6.12; declaring our own copies means
+ * this file builds against any toolchain and decides what the
+ * running kernel supports at run time instead of build time.
+ * ---------------------------------------------------------- */
+
+#ifndef __NR_landlock_create_ruleset
+#define __NR_landlock_create_ruleset 444
+#endif
+#ifndef __NR_landlock_add_rule
+#define __NR_landlock_add_rule 445
+#endif
+#ifndef __NR_landlock_restrict_self
+#define __NR_landlock_restrict_self 446
+#endif
+#ifndef __NR_close_range
+#define __NR_close_range 436
+#endif
+
+#define OB_LL_VERSION_QUERY (1U << 0)   /* LANDLOCK_CREATE_RULESET_VERSION */
+#define OB_LL_RULE_PATH_BENEATH 1
+#define OB_LL_RULE_NET_PORT     2
+
+/* filesystem access rights */
+#define OB_FS_EXECUTE     (1ULL << 0)
+#define OB_FS_WRITE_FILE  (1ULL << 1)
+#define OB_FS_READ_FILE   (1ULL << 2)
+#define OB_FS_READ_DIR    (1ULL << 3)
+#define OB_FS_REMOVE_DIR  (1ULL << 4)
+#define OB_FS_REMOVE_FILE (1ULL << 5)
+#define OB_FS_MAKE_CHAR   (1ULL << 6)
+#define OB_FS_MAKE_DIR    (1ULL << 7)
+#define OB_FS_MAKE_REG    (1ULL << 8)
+#define OB_FS_MAKE_SOCK   (1ULL << 9)
+#define OB_FS_MAKE_FIFO   (1ULL << 10)
+#define OB_FS_MAKE_BLOCK  (1ULL << 11)
+#define OB_FS_MAKE_SYM    (1ULL << 12)
+#define OB_FS_REFER       (1ULL << 13)  /* ABI 2 */
+#define OB_FS_TRUNCATE    (1ULL << 14)  /* ABI 3 */
+#define OB_FS_IOCTL_DEV   (1ULL << 15)  /* ABI 5 */
+
+/* network access rights, ABI 4 */
+#define OB_NET_BIND_TCP    (1ULL << 0)
+#define OB_NET_CONNECT_TCP (1ULL << 1)
+
+/* scoping, ABI 6 */
+#define OB_SCOPE_ABSTRACT_UNIX (1ULL << 0)
+#define OB_SCOPE_SIGNAL        (1ULL << 1)
+
+struct ob_ruleset_attr {
+    uint64_t handled_access_fs;
+    uint64_t handled_access_net;   /* ABI 4 */
+    uint64_t scoped;               /* ABI 6 */
+};
+
+struct ob_path_beneath_attr {
+    uint64_t allowed_access;
+    int32_t  parent_fd;
+} __attribute__((packed));
+
+struct ob_net_port_attr {
+    uint64_t allowed_access;
+    uint64_t port;
+};
+
+/* capabilities, without linking libcap */
+#define OB_CAP_VERSION_3 0x20080522
+struct ob_cap_header { uint32_t version; int pid; };
+struct ob_cap_data   { uint32_t effective, permitted, inheritable; };
+
+#ifndef PR_SET_NO_NEW_PRIVS
+#define PR_SET_NO_NEW_PRIVS 38
+#endif
+#ifndef PR_CAPBSET_DROP
+#define PR_CAPBSET_DROP 24
+#endif
+#ifndef PR_CAP_AMBIENT
+#define PR_CAP_AMBIENT 47
+#endif
+#ifndef PR_CAP_AMBIENT_CLEAR_ALL
+#define PR_CAP_AMBIENT_CLEAR_ALL 4
+#endif
+
+/* audit arch for the seccomp arch guard */
+#if defined(__x86_64__)
+#  ifndef AUDIT_ARCH_X86_64
+#    define AUDIT_ARCH_X86_64 0xc000003e
+#  endif
+#  define OB_AUDIT_ARCH AUDIT_ARCH_X86_64
+#  define OB_X32_BIT 0x40000000
+#elif defined(__i386__)
+#  define OB_AUDIT_ARCH AUDIT_ARCH_I386
+#elif defined(__aarch64__)
+#  define OB_AUDIT_ARCH AUDIT_ARCH_AARCH64
+#elif defined(__arm__)
+#  define OB_AUDIT_ARCH AUDIT_ARCH_ARM
+#elif defined(__riscv) && __riscv_xlen == 64
+#  define OB_AUDIT_ARCH AUDIT_ARCH_RISCV64
+#elif defined(__powerpc64__)
+#  define OB_AUDIT_ARCH AUDIT_ARCH_PPC64LE
+#else
+#  define OB_AUDIT_ARCH 0
+#endif
+
+#ifndef SECCOMP_RET_KILL_PROCESS
+#define SECCOMP_RET_KILL_PROCESS 0x80000000U
+#endif
+#ifndef SECCOMP_SET_MODE_FILTER
+#define SECCOMP_SET_MODE_FILTER 1
+#endif
+#ifndef SECCOMP_FILTER_FLAG_TSYNC
+#define SECCOMP_FILTER_FLAG_TSYNC 1
+#endif
+
+/* ------------------------------------------------------------
+ * Configuration
+ * ---------------------------------------------------------- */
+
+#define OB_MAX_PATHS   512
+#define OB_MAX_RULES  4096
+#define OB_MAX_PORTS    64
+#define OB_PRUNE_DEPTH    6
+
+enum ob_kind { OB_RO = 0, OB_RX, OB_RW, OB_RWX, OB_DEV };
+
+struct ob_grant {
+    char        path[PATH_MAX];
+    enum ob_kind kind;
+};
+
+static struct ob_grant grants[OB_MAX_PATHS];
+static int             ngrants;
+
+static char denies[OB_MAX_PATHS][PATH_MAX];
+static int  ndenies;
+
+static struct { unsigned port; int bind; } netports[OB_MAX_PORTS];
+static int  nnetports;
+
+static int  cfg_enabled;        /* 0 off, 1 strict, 2 paranoid  */
+static int  cfg_plan_only;      /* print the plan, enforce nothing */
+static int  cfg_verbose;
+static int  cfg_hard_fail;      /* abort if a layer cannot load */
+static int  cfg_net_all;        /* OBSIDIAN_ALLOW_NET=all       */
+static int  cfg_net_any;        /* any network grant at all     */
+static int  cfg_scope_ipc = -1; /* -1 = auto                    */
+static int  cfg_memfd_deny;
+static int  cfg_nested_ns;      /* allow CLONE_NEW* / unshare   */
+static int  cfg_keep_caps;
+static int  cfg_keep_fds;
+static int  cfg_no_seccomp;
+static int  cfg_no_landlock;
+static int  cfg_defaults = 1;   /* seed the base allow-list     */
+
+static int  rules_added;
+static int  rules_skipped;
+static int  landlock_abi;
+
+/* ------------------------------------------------------------
+ * small helpers
+ * ---------------------------------------------------------- */
+
+static void vlog(const char *fmt, ...)
+{
+    va_list ap;
+    if (!cfg_verbose && !cfg_plan_only) return;
+    va_start(ap, fmt);
+    fputs("obsidian-harden: ", stderr);
+    vfprintf(stderr, fmt, ap);
+    fputc('\n', stderr);
+    va_end(ap);
+}
+
+static void warn(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    fputs("obsidian-harden: ", stderr);
+    vfprintf(stderr, fmt, ap);
+    fputc('\n', stderr);
+    va_end(ap);
+}
+
+/* Expand a leading ~ or $VAR component. Returns 0 on success. */
+static int expand_path(const char *in, char *out, size_t outsz)
+{
+    const char *home;
+
+    if (!in || !*in) return -1;
+
+    if (in[0] == '~' && (in[1] == '/' || in[1] == 0)) {
+        home = getenv("HOME");
+        if (!home || !*home) return -1;
+        if ((size_t)snprintf(out, outsz, "%s%s", home, in + 1) >= outsz)
+            return -1;
+        return 0;
+    }
+
+    if (in[0] == '$') {
+        char name[128];
+        const char *slash = strchr(in + 1, '/');
+        size_t n = slash ? (size_t)(slash - in - 1) : strlen(in + 1);
+        const char *val;
+        if (n == 0 || n >= sizeof(name)) return -1;
+        memcpy(name, in + 1, n);
+        name[n] = 0;
+        val = getenv(name);
+        if (!val || !*val) return -1;
+        if ((size_t)snprintf(out, outsz, "%s%s", val, slash ? slash : "") >= outsz)
+            return -1;
+        return 0;
+    }
+
+    if (in[0] != '/') return -1;   /* only absolute paths are accepted */
+    if ((size_t)snprintf(out, outsz, "%s", in) >= outsz) return -1;
+    return 0;
+}
+
+static void add_grant(const char *raw, enum ob_kind kind)
+{
+    char buf[PATH_MAX];
+    int i;
+
+    if (ngrants >= OB_MAX_PATHS) return;
+    if (expand_path(raw, buf, sizeof(buf)) != 0) return;
+
+    /* strip a trailing slash so prefix tests behave */
+    i = (int)strlen(buf);
+    while (i > 1 && buf[i - 1] == '/') buf[--i] = 0;
+
+    for (i = 0; i < ngrants; i++)
+        if (strcmp(grants[i].path, buf) == 0 && grants[i].kind == kind)
+            return;
+
+    snprintf(grants[ngrants].path, PATH_MAX, "%s", buf);
+    grants[ngrants].kind = kind;
+    ngrants++;
+}
+
+static void add_deny(const char *raw)
+{
+    char buf[PATH_MAX];
+    int i;
+
+    if (ndenies >= OB_MAX_PATHS) return;
+    if (expand_path(raw, buf, sizeof(buf)) != 0) return;
+    i = (int)strlen(buf);
+    while (i > 1 && buf[i - 1] == '/') buf[--i] = 0;
+
+    for (i = 0; i < ndenies; i++)
+        if (strcmp(denies[i], buf) == 0) return;
+
+    snprintf(denies[ndenies], PATH_MAX, "%s", buf);
+    ndenies++;
+}
+
+/* Split a colon separated list and hand each element to add_grant. */
+static void add_list(const char *list, enum ob_kind kind)
+{
+    char buf[8192], *p, *q;
+
+    if (!list || !*list) return;
+    snprintf(buf, sizeof(buf), "%s", list);
+    p = buf;
+    while (p && *p) {
+        q = strchr(p, ':');
+        /* a colon that is part of "$VAR" is impossible, so a plain
+         * split is safe here */
+        if (q) *q = 0;
+        while (*p == ' ') p++;
+        if (*p) add_grant(p, kind);
+        p = q ? q + 1 : NULL;
+    }
+}
+
+static void add_deny_list(const char *list)
+{
+    char buf[8192], *p, *q;
+
+    if (!list || !*list) return;
+    snprintf(buf, sizeof(buf), "%s", list);
+    p = buf;
+    while (p && *p) {
+        q = strchr(p, ':');
+        if (q) *q = 0;
+        while (*p == ' ') p++;
+        if (*p) add_deny(p);
+        p = q ? q + 1 : NULL;
+    }
+}
+
+/* "a is at or beneath b" */
+static int path_under(const char *a, const char *b)
+{
+    size_t lb = strlen(b);
+    if (strcmp(b, "/") == 0) return 1;
+    if (strncmp(a, b, lb) != 0) return 0;
+    return a[lb] == 0 || a[lb] == '/';
+}
+
+/* is any hard-deny entry strictly beneath this path */
+static int deny_below(const char *path)
+{
+    int i;
+    for (i = 0; i < ndenies; i++)
+        if (path_under(denies[i], path) && strcmp(denies[i], path) != 0)
+            return 1;
+    return 0;
+}
+
+static int deny_hits(const char *path)
+{
+    int i;
+    for (i = 0; i < ndenies; i++)
+        if (path_under(path, denies[i]))
+            return 1;
+    return 0;
+}
+
+/* ------------------------------------------------------------
+ * Landlock
+ * ---------------------------------------------------------- */
+
+static uint64_t handled_fs;
+static uint64_t handled_net;
+static uint64_t handled_scope;
+
+static uint64_t rights_for(enum ob_kind kind, int isdir)
+{
+    uint64_t r = 0;
+
+    switch (kind) {
+    case OB_RO:
+        r = OB_FS_READ_FILE | OB_FS_READ_DIR;
+        break;
+    case OB_RX:
+        r = OB_FS_READ_FILE | OB_FS_READ_DIR | OB_FS_EXECUTE;
+        break;
+    case OB_RW:
+    case OB_RWX:
+        r = OB_FS_READ_FILE | OB_FS_READ_DIR | OB_FS_WRITE_FILE |
+            OB_FS_REMOVE_DIR | OB_FS_REMOVE_FILE | OB_FS_MAKE_CHAR |
+            OB_FS_MAKE_DIR | OB_FS_MAKE_REG | OB_FS_MAKE_SOCK |
+            OB_FS_MAKE_FIFO | OB_FS_MAKE_BLOCK | OB_FS_MAKE_SYM |
+            OB_FS_REFER | OB_FS_TRUNCATE;
+        if (kind == OB_RWX) r |= OB_FS_EXECUTE;
+        break;
+    case OB_DEV:
+        r = OB_FS_READ_FILE | OB_FS_WRITE_FILE | OB_FS_READ_DIR |
+            OB_FS_TRUNCATE | OB_FS_IOCTL_DEV | OB_FS_MAKE_SOCK |
+            OB_FS_MAKE_FIFO | OB_FS_MAKE_REG | OB_FS_MAKE_DIR |
+            OB_FS_REMOVE_FILE | OB_FS_REMOVE_DIR;
+        break;
+    }
+
+    /* A rule on a non-directory may only carry file rights, or the
+     * kernel rejects the whole rule with EINVAL. */
+    if (!isdir)
+        r &= (OB_FS_EXECUTE | OB_FS_WRITE_FILE | OB_FS_READ_FILE |
+              OB_FS_TRUNCATE | OB_FS_IOCTL_DEV);
+
+    return r & handled_fs;
+}
+
+static int ll_add_path(int ruleset_fd, const char *path, enum ob_kind kind)
+{
+    struct ob_path_beneath_attr pb;
+    struct stat st;
+    int fd, rc;
+
+    if (rules_added >= OB_MAX_RULES) return -1;
+
+    if (stat(path, &st) != 0) return 0;      /* absent here: nothing to grant */
+
+    fd = open(path, O_PATH | O_CLOEXEC | O_NOFOLLOW);
+    if (fd < 0) {
+        /* O_NOFOLLOW on a symlink: resolve it and grant the target */
+        fd = open(path, O_PATH | O_CLOEXEC);
+        if (fd < 0) { rules_skipped++; return 0; }
+    }
+
+    pb.allowed_access = rights_for(kind, S_ISDIR(st.st_mode));
+    pb.parent_fd = fd;
+
+    if (pb.allowed_access == 0) { close(fd); rules_skipped++; return 0; }
+
+    rc = (int)syscall(__NR_landlock_add_rule, ruleset_fd,
+                      OB_LL_RULE_PATH_BENEATH, &pb, 0U);
+    close(fd);
+
+    if (rc != 0) {
+        rules_skipped++;
+        if (cfg_verbose)
+            warn("rule rejected for %s (%s)", path, strerror(errno));
+        return -1;
+    }
+
+    rules_added++;
+    if (cfg_plan_only || cfg_verbose)
+        fprintf(stderr, "  grant %-4s %s\n",
+                kind == OB_RO ? "ro" : kind == OB_RX ? "rx" :
+                kind == OB_RW ? "rw" : kind == OB_RWX ? "rwx" : "dev",
+                path);
+    return 0;
+}
+
+/* Grant a path, carving out any hard-deny entry that lives beneath it.
+ *
+ * This is the part that makes "default-deny with a minimal grant"
+ * survive contact with reality: an app legitimately needs /dev, and
+ * /dev legitimately contains /dev/mem. Rather than refuse the grant
+ * or hand over the disk, walk one level down and grant the children
+ * that are not on, and do not contain, a hard-deny path. */
+static void ll_grant_pruned(int ruleset_fd, const char *path,
+                            enum ob_kind kind, int depth)
+{
+    DIR *d;
+    struct dirent *e;
+    char child[PATH_MAX];
+
+    if (deny_hits(path)) {
+        vlog("hard-deny, not granted: %s", path);
+        return;
+    }
+
+    if (!deny_below(path) || depth >= OB_PRUNE_DEPTH) {
+        if (deny_below(path))
+            warn("prune depth reached, %s NOT granted (would expose a "
+                 "hard-deny path)", path);
+        else
+            ll_add_path(ruleset_fd, path, kind);
+        return;
+    }
+
+    d = opendir(path);
+    if (!d) {
+        /* cannot enumerate: refuse rather than over-grant */
+        warn("cannot enumerate %s to prune it, not granted", path);
+        return;
+    }
+
+    vlog("pruning %s (a hard-deny path lives beneath it)", path);
+    while ((e = readdir(d)) != NULL) {
+        if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0)
+            continue;
+        if ((size_t)snprintf(child, sizeof(child), "%s/%s",
+                             strcmp(path, "/") == 0 ? "" : path,
+                             e->d_name) >= sizeof(child))
+            continue;
+        ll_grant_pruned(ruleset_fd, child, kind, depth + 1);
+    }
+    closedir(d);
+}
+
+static int landlock_apply(void)
+{
+    struct ob_ruleset_attr attr;
+    size_t attrsz;
+    int fd, i;
+
+    landlock_abi = (int)syscall(__NR_landlock_create_ruleset, NULL, 0,
+                                OB_LL_VERSION_QUERY);
+    if (landlock_abi < 1) {
+        warn("Landlock unavailable on this kernel (%s). Filesystem, device "
+             "and network confinement are NOT active.", strerror(errno));
+        return -1;
+    }
+
+    handled_fs =
+        OB_FS_EXECUTE | OB_FS_WRITE_FILE | OB_FS_READ_FILE | OB_FS_READ_DIR |
+        OB_FS_REMOVE_DIR | OB_FS_REMOVE_FILE | OB_FS_MAKE_CHAR |
+        OB_FS_MAKE_DIR | OB_FS_MAKE_REG | OB_FS_MAKE_SOCK | OB_FS_MAKE_FIFO |
+        OB_FS_MAKE_BLOCK | OB_FS_MAKE_SYM;
+    if (landlock_abi >= 2) handled_fs |= OB_FS_REFER;
+    if (landlock_abi >= 3) handled_fs |= OB_FS_TRUNCATE;
+    if (landlock_abi >= 5) handled_fs |= OB_FS_IOCTL_DEV;
+
+    if (landlock_abi >= 4 && !cfg_net_all)
+        handled_net = OB_NET_BIND_TCP | OB_NET_CONNECT_TCP;
+
+    if (landlock_abi >= 6 && cfg_scope_ipc == 1)
+        handled_scope = OB_SCOPE_ABSTRACT_UNIX | OB_SCOPE_SIGNAL;
+
+    memset(&attr, 0, sizeof(attr));
+    attr.handled_access_fs  = handled_fs;
+    attr.handled_access_net = handled_net;
+    attr.scoped             = handled_scope;
+
+    if (landlock_abi >= 6)      attrsz = sizeof(attr);
+    else if (landlock_abi >= 4) attrsz = sizeof(uint64_t) * 2;
+    else                        attrsz = sizeof(uint64_t);
+
+    fd = (int)syscall(__NR_landlock_create_ruleset, &attr, attrsz, 0U);
+    if (fd < 0) {
+        warn("landlock_create_ruleset: %s", strerror(errno));
+        return -1;
+    }
+
+    vlog("Landlock ABI %d, default-deny ruleset created", landlock_abi);
+
+    for (i = 0; i < ngrants; i++)
+        ll_grant_pruned(fd, grants[i].path, grants[i].kind, 0);
+
+    if (handled_net) {
+        for (i = 0; i < nnetports; i++) {
+            struct ob_net_port_attr np;
+            np.allowed_access = netports[i].bind
+                              ? OB_NET_BIND_TCP : OB_NET_CONNECT_TCP;
+            np.port = netports[i].port;
+            if (syscall(__NR_landlock_add_rule, fd, OB_LL_RULE_NET_PORT,
+                        &np, 0U) != 0)
+                warn("net rule for port %u rejected: %s",
+                     netports[i].port, strerror(errno));
+            else if (cfg_plan_only || cfg_verbose)
+                fprintf(stderr, "  grant net  tcp %s %u\n",
+                        netports[i].bind ? "bind" : "connect",
+                        netports[i].port);
+        }
+    }
+
+    if (cfg_plan_only) { close(fd); return 0; }
+
+    if (syscall(__NR_landlock_restrict_self, fd, 0U) != 0) {
+        warn("landlock_restrict_self: %s", strerror(errno));
+        close(fd);
+        return -1;
+    }
+
+    close(fd);
+    vlog("filesystem boundary sealed: %d grants, %d skipped",
+         rules_added, rules_skipped);
+    return 0;
+}
+
+/* ------------------------------------------------------------
+ * seccomp-bpf, assembled here rather than through libseccomp so
+ * the enforcer has no build dependency and the exact program is
+ * auditable in one place.
+ * ---------------------------------------------------------- */
+
+#define OB_MAX_INSN 1024
+static struct sock_filter prog[OB_MAX_INSN];
+static int nprog;
+static int acc_holds_nr;
+
+#define OFF_NR      0
+#define OFF_ARCH    4
+#define OFF_ARG(i)  (16 + 8 * (i))          /* low word, little endian */
+
+#define RET_EPERM  (SECCOMP_RET_ERRNO | (EPERM  & SECCOMP_RET_DATA))
+#define RET_ENOSYS (SECCOMP_RET_ERRNO | (ENOSYS & SECCOMP_RET_DATA))
+#define RET_EACCES (SECCOMP_RET_ERRNO | (EACCES & SECCOMP_RET_DATA))
+#define RET_EAFNO  (SECCOMP_RET_ERRNO | (EAFNOSUPPORT & SECCOMP_RET_DATA))
+#define RET_KILL   SECCOMP_RET_KILL_PROCESS
+
+static void emit(struct sock_filter f)
+{
+    if (nprog < OB_MAX_INSN) prog[nprog++] = f;
+}
+
+static void load_nr(void)
+{
+    if (acc_holds_nr) return;
+    emit((struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS, OFF_NR));
+    acc_holds_nr = 1;
+}
+
+/* whole syscall denied */
+static void deny(long nr, uint32_t action)
+{
+    if (nr < 0) return;
+    load_nr();
+    emit((struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K,
+                                      (uint32_t)nr, 0, 1));
+    emit((struct sock_filter)BPF_STMT(BPF_RET | BPF_K, action));
+}
+
+/* denied only when any bit of mask is set in arg[argi] */
+static void deny_flag(long nr, int argi, uint32_t mask, uint32_t action)
+{
+    if (nr < 0) return;
+    load_nr();
+    emit((struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K,
+                                      (uint32_t)nr, 0, 3));
+    emit((struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS,
+                                      OFF_ARG(argi)));
+    emit((struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JSET | BPF_K, mask, 0, 1));
+    emit((struct sock_filter)BPF_STMT(BPF_RET | BPF_K, action));
+    acc_holds_nr = 0;
+}
+
+/* denied unless arg[argi] equals one of the listed values */
+static void allow_only(long nr, int argi, const uint32_t *vals, int nvals,
+                       uint32_t action)
+{
+    int i;
+    if (nr < 0 || nvals <= 0) return;
+    load_nr();
+    emit((struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K,
+                                      (uint32_t)nr, 0, nvals + 2));
+    emit((struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS,
+                                      OFF_ARG(argi)));
+    for (i = 0; i < nvals; i++)
+        emit((struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K,
+                                          vals[i], nvals - i, 0));
+    emit((struct sock_filter)BPF_STMT(BPF_RET | BPF_K, action));
+    acc_holds_nr = 0;
+}
+
+#define NR_OF(name) OB_NR_##name
+#ifdef __NR_ptrace
+#define OB_NR_ptrace __NR_ptrace
+#else
+#define OB_NR_ptrace -1
+#endif
+
+/* Table driven for the plain denials. A syscall the running
+ * architecture does not define is simply absent from the table. */
+struct denyent { long nr; uint32_t act; const char *why; };
+
+static const struct denyent deny_table[] = {
+    /* --- memory: another process's address space is not yours --- */
+#ifdef __NR_ptrace
+    { __NR_ptrace,            RET_EPERM, "ptrace" },
+#endif
+#ifdef __NR_process_vm_readv
+    { __NR_process_vm_readv,  RET_EPERM, "process_vm_readv" },
+#endif
+#ifdef __NR_process_vm_writev
+    { __NR_process_vm_writev, RET_EPERM, "process_vm_writev" },
+#endif
+#ifdef __NR_process_madvise
+    { __NR_process_madvise,   RET_EPERM, "process_madvise" },
+#endif
+#ifdef __NR_kcmp
+    { __NR_kcmp,              RET_EPERM, "kcmp" },
+#endif
+#ifdef __NR_pidfd_getfd
+    { __NR_pidfd_getfd,       RET_EPERM, "pidfd_getfd" },
+#endif
+#ifdef __NR_userfaultfd
+    { __NR_userfaultfd,       RET_EPERM, "userfaultfd" },
+#endif
+#ifdef __NR_perf_event_open
+    { __NR_perf_event_open,   RET_EPERM, "perf_event_open" },
+#endif
+#ifdef __NR_lookup_dcookie
+    { __NR_lookup_dcookie,    RET_EPERM, "lookup_dcookie" },
+#endif
+
+    /* --- the logs. reading the kernel ring buffer is reading every
+     *     other subsystem's diary --- */
+#ifdef __NR_syslog
+    { __NR_syslog,            RET_EPERM, "syslog" },
+#endif
+
+    /* --- kernel code loading --- */
+#ifdef __NR_init_module
+    { __NR_init_module,       RET_EPERM, "init_module" },
+#endif
+#ifdef __NR_finit_module
+    { __NR_finit_module,      RET_EPERM, "finit_module" },
+#endif
+#ifdef __NR_delete_module
+    { __NR_delete_module,     RET_EPERM, "delete_module" },
+#endif
+#ifdef __NR_kexec_load
+    { __NR_kexec_load,        RET_EPERM, "kexec_load" },
+#endif
+#ifdef __NR_kexec_file_load
+    { __NR_kexec_file_load,   RET_EPERM, "kexec_file_load" },
+#endif
+#ifdef __NR_bpf
+    { __NR_bpf,               RET_EPERM, "bpf" },
+#endif
+
+    /* --- io_uring: a second syscall interface that seccomp cannot
+     *     see into. Closing it keeps this filter meaningful --- */
+#ifdef __NR_io_uring_setup
+    { __NR_io_uring_setup,    RET_EPERM, "io_uring_setup" },
+#endif
+#ifdef __NR_io_uring_enter
+    { __NR_io_uring_enter,    RET_EPERM, "io_uring_enter" },
+#endif
+#ifdef __NR_io_uring_register
+    { __NR_io_uring_register, RET_EPERM, "io_uring_register" },
+#endif
+
+    /* --- direct hardware port I/O: nothing legitimate does this --- */
+#ifdef __NR_iopl
+    { __NR_iopl,              RET_KILL,  "iopl" },
+#endif
+#ifdef __NR_ioperm
+    { __NR_ioperm,            RET_KILL,  "ioperm" },
+#endif
+
+    /* --- filesystem escapes by handle --- */
+#ifdef __NR_open_by_handle_at
+    { __NR_open_by_handle_at, RET_EPERM, "open_by_handle_at" },
+#endif
+#ifdef __NR_name_to_handle_at
+    { __NR_name_to_handle_at, RET_EPERM, "name_to_handle_at" },
+#endif
+#ifdef __NR_fanotify_init
+    { __NR_fanotify_init,     RET_EPERM, "fanotify_init" },
+#endif
+
+    /* --- mount and namespace machinery --- */
+#ifdef __NR_setns
+    { __NR_setns,             RET_EPERM, "setns" },
+#endif
+#ifdef __NR_mount
+    { __NR_mount,             RET_EPERM, "mount" },
+#endif
+#ifdef __NR_umount2
+    { __NR_umount2,           RET_EPERM, "umount2" },
+#endif
+#ifdef __NR_pivot_root
+    { __NR_pivot_root,        RET_EPERM, "pivot_root" },
+#endif
+#ifdef __NR_chroot
+    { __NR_chroot,            RET_EPERM, "chroot" },
+#endif
+#ifdef __NR_move_mount
+    { __NR_move_mount,        RET_EPERM, "move_mount" },
+#endif
+#ifdef __NR_open_tree
+    { __NR_open_tree,         RET_EPERM, "open_tree" },
+#endif
+#ifdef __NR_fsopen
+    { __NR_fsopen,            RET_EPERM, "fsopen" },
+#endif
+#ifdef __NR_fsconfig
+    { __NR_fsconfig,          RET_EPERM, "fsconfig" },
+#endif
+#ifdef __NR_fsmount
+    { __NR_fsmount,           RET_EPERM, "fsmount" },
+#endif
+#ifdef __NR_fspick
+    { __NR_fspick,            RET_EPERM, "fspick" },
+#endif
+#ifdef __NR_mount_setattr
+    { __NR_mount_setattr,     RET_EPERM, "mount_setattr" },
+#endif
+
+    /* --- clock: both a host-damage and a fingerprint surface --- */
+#ifdef __NR_settimeofday
+    { __NR_settimeofday,      RET_EPERM, "settimeofday" },
+#endif
+#ifdef __NR_clock_settime
+    { __NR_clock_settime,     RET_EPERM, "clock_settime" },
+#endif
+#ifdef __NR_clock_adjtime
+    { __NR_clock_adjtime,     RET_EPERM, "clock_adjtime" },
+#endif
+#ifdef __NR_adjtimex
+    { __NR_adjtimex,          RET_EPERM, "adjtimex" },
+#endif
+
+    /* --- kernel keyring: other people's secrets --- */
+#ifdef __NR_keyctl
+    { __NR_keyctl,            RET_EPERM, "keyctl" },
+#endif
+#ifdef __NR_add_key
+    { __NR_add_key,           RET_EPERM, "add_key" },
+#endif
+#ifdef __NR_request_key
+    { __NR_request_key,       RET_EPERM, "request_key" },
+#endif
+
+    /* --- host state the app has no business touching --- */
+#ifdef __NR_sethostname
+    { __NR_sethostname,       RET_EPERM, "sethostname" },
+#endif
+#ifdef __NR_setdomainname
+    { __NR_setdomainname,     RET_EPERM, "setdomainname" },
+#endif
+#ifdef __NR_swapon
+    { __NR_swapon,            RET_EPERM, "swapon" },
+#endif
+#ifdef __NR_swapoff
+    { __NR_swapoff,           RET_EPERM, "swapoff" },
+#endif
+#ifdef __NR_reboot
+    { __NR_reboot,            RET_EPERM, "reboot" },
+#endif
+#ifdef __NR_acct
+    { __NR_acct,              RET_EPERM, "acct" },
+#endif
+#ifdef __NR_quotactl
+    { __NR_quotactl,          RET_EPERM, "quotactl" },
+#endif
+#ifdef __NR_vhangup
+    { __NR_vhangup,           RET_EPERM, "vhangup" },
+#endif
+};
+
+#define NDENY ((int)(sizeof(deny_table) / sizeof(deny_table[0])))
+
+static int seccomp_apply(void)
+{
+    struct sock_fprog fprog;
+    int i;
+
+    nprog = 0;
+    acc_holds_nr = 0;
+
+    /* Architecture guard. A 64-bit process that issues a 32-bit or
+     * x32 syscall is renumbering the whole table underneath this
+     * filter, which is the oldest seccomp bypass there is. */
+    if (OB_AUDIT_ARCH) {
+        emit((struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS, OFF_ARCH));
+        emit((struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K,
+                                          OB_AUDIT_ARCH, 1, 0));
+        emit((struct sock_filter)BPF_STMT(BPF_RET | BPF_K, RET_ENOSYS));
+#ifdef OB_X32_BIT
+        emit((struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS, OFF_NR));
+        emit((struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JGE | BPF_K,
+                                          OB_X32_BIT, 0, 1));
+        emit((struct sock_filter)BPF_STMT(BPF_RET | BPF_K, RET_ENOSYS));
+        acc_holds_nr = 1;
+#endif
+    }
+
+    for (i = 0; i < NDENY; i++)
+        deny(deny_table[i].nr, deny_table[i].act);
+
+    /* --- execution ---------------------------------------------
+     * execveat with AT_EMPTY_PATH executes a file descriptor that
+     * has no name in any filesystem. That is precisely the
+     * memfd_create + execve pattern, and it is the one exec path
+     * a filesystem policy cannot see. */
+#ifdef __NR_execveat
+    deny_flag(__NR_execveat, 4, 0x1000 /* AT_EMPTY_PATH */, RET_EACCES);
+#endif
+#ifdef __NR_memfd_create
+    if (cfg_memfd_deny)
+        deny(__NR_memfd_create, RET_EPERM);
+    else
+        /* MFD_EXEC, kernel 6.3+: an explicitly executable anonymous
+         * file. Denied even when plain memfd is allowed, because
+         * shared memory never needs it. */
+        deny_flag(__NR_memfd_create, 1, 0x0008 /* MFD_EXEC */, RET_EPERM);
+#endif
+
+    /* ASLR off, or "every readable page is also executable", are
+     * requests only an exploit makes. */
+#ifdef __NR_personality
+    deny_flag(__NR_personality, 0, 0x0040000 | 0x0400000, RET_EPERM);
+#endif
+
+    /* --- namespaces --------------------------------------------
+     * An app that can build a namespace can build a place where it
+     * is root, and root inside a namespace is the first half of
+     * most container escapes. */
+    if (!cfg_nested_ns) {
+#ifdef __NR_unshare
+        deny(__NR_unshare, RET_EPERM);
+#endif
+#if defined(__NR_clone) && (defined(__x86_64__) || defined(__i386__) || \
+    defined(__aarch64__) || defined(__arm__) || defined(__riscv))
+        /* CLONE_NEWNS|NEWCGROUP|NEWUTS|NEWIPC|NEWUSER|NEWPID|NEWNET */
+        deny_flag(__NR_clone, 0, 0x7E020000U, RET_EPERM);
+#endif
+#ifdef __NR_clone3
+        /* clone3 takes a struct, so its flags cannot be inspected by
+         * a BPF filter. ENOSYS makes libc fall back to clone, which
+         * can be inspected. */
+        deny(__NR_clone3, RET_ENOSYS);
+#endif
+    }
+
+    /* --- network ------------------------------------------------
+     * Default deny is expressed at the address family: AF_UNIX is
+     * needed for the display server and is kept, everything that
+     * can reach off this machine is refused at socket() time. */
+    if (!cfg_net_all) {
+        uint32_t allowed[4];
+        int n = 0;
+        allowed[n++] = 1;                 /* AF_UNIX  */
+        if (cfg_net_any) {
+            allowed[n++] = 2;             /* AF_INET  */
+            allowed[n++] = 10;            /* AF_INET6 */
+        }
+#ifdef __NR_socket
+        allow_only(__NR_socket, 0, allowed, n, RET_EAFNO);
+#endif
+#ifdef __NR_socketpair
+        allow_only(__NR_socketpair, 0, allowed, n, RET_EAFNO);
+#endif
+    }
+
+    emit((struct sock_filter)BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW));
+
+    if (nprog >= OB_MAX_INSN) {
+        warn("seccomp program overflowed, filter NOT loaded");
+        return -1;
+    }
+
+    if (cfg_plan_only) {
+        vlog("seccomp program assembled: %d instructions (not loaded)", nprog);
+        return 0;
+    }
+
+    fprog.len = (unsigned short)nprog;
+    fprog.filter = prog;
+
+    if (syscall(__NR_seccomp, SECCOMP_SET_MODE_FILTER,
+                SECCOMP_FILTER_FLAG_TSYNC, &fprog) != 0) {
+        if (prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &fprog, 0, 0) != 0) {
+            warn("seccomp filter load failed: %s", strerror(errno));
+            return -1;
+        }
+    }
+
+    vlog("syscall boundary sealed: %d instructions", nprog);
+    return 0;
+}
+
+/* ------------------------------------------------------------
+ * capabilities and privilege
+ * ---------------------------------------------------------- */
+
+/* Read the effective capability mask this process actually holds. */
+static unsigned long long caps_effective(void)
+{
+    FILE *f = fopen("/proc/self/status", "r");
+    char line[256];
+    unsigned long long v = 0;
+
+    if (!f) return 0;
+    while (fgets(line, sizeof(line), f)) {
+        if (strncmp(line, "CapEff:", 7) == 0) {
+            v = strtoull(line + 7, NULL, 16);
+            break;
+        }
+    }
+    fclose(f);
+    return v;
+}
+
+static int caps_drop(void)
+{
+    struct ob_cap_header hdr;
+    struct ob_cap_data data[2];
+    unsigned long long held = caps_effective();
+    int i, failed = 0;
+
+    prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0);
+
+    for (i = 0; i <= 63; i++) {
+        if (prctl(PR_CAPBSET_DROP, i, 0, 0, 0) != 0) {
+            if (errno == EINVAL) break;   /* past the last capability */
+            failed++;
+        }
+    }
+
+    memset(&hdr, 0, sizeof(hdr));
+    memset(data, 0, sizeof(data));
+    hdr.version = OB_CAP_VERSION_3;
+    hdr.pid = 0;
+    if (syscall(__NR_capset, &hdr, data) != 0)
+        failed++;
+
+    if (failed && held == 0) {
+        /* Emptying the bounding set needs CAP_SETPCAP. A process that
+         * holds no capability cannot drop it - and cannot use it
+         * either, since no_new_privs blocks every path back to
+         * privilege. Reporting this as a failure would be a lie in
+         * the safe direction, which is still a lie. */
+        vlog("capabilities: none held (CapEff 0); bounding set left "
+             "untouched, it needs CAP_SETPCAP to clear and cannot be "
+             "reached from here");
+        return 0;
+    }
+
+    if (failed)
+        warn("capability drop partially refused (%d entries), bounding set "
+             "may retain capabilities", failed);
+    else
+        vlog("capabilities dropped: bounding set empty, ambient cleared");
+
+    return failed ? -1 : 0;
+}
+
+/* ------------------------------------------------------------
+ * launch-state scrub
+ *
+ * A process inherits more than its arguments. Descriptors left
+ * open by whatever started it are readable and writable objects
+ * that no policy layer above ever sees, because they were opened
+ * before the policy existed.
+ * ---------------------------------------------------------- */
+
+static void scrub_fds(void)
+{
+    DIR *d;
+    struct dirent *e;
+    int maxfd = 0, fd;
+
+    if (syscall(__NR_close_range, 3, ~0U, 0) == 0) {
+        vlog("launch state: inherited descriptors above stderr closed "
+             "(close_range)");
+        return;
+    }
+
+    d = opendir("/proc/self/fd");
+    if (d) {
+        int dfd = dirfd(d);
+        while ((e = readdir(d)) != NULL) {
+            if (!isdigit((unsigned char)e->d_name[0])) continue;
+            fd = atoi(e->d_name);
+            if (fd > 2 && fd != dfd) close(fd);
+        }
+        closedir(d);
+        vlog("launch state: inherited descriptors above stderr closed "
+             "(/proc/self/fd)");
+        return;
+    }
+
+    maxfd = (int)sysconf(_SC_OPEN_MAX);
+    if (maxfd < 0 || maxfd > 65536) maxfd = 4096;
+    for (fd = 3; fd < maxfd; fd++) close(fd);
+    vlog("launch state: inherited descriptors above stderr closed (sweep)");
+}
+
+/* ------------------------------------------------------------
+ * profile and environment parsing
+ * ---------------------------------------------------------- */
+
+static void add_net_grant(const char *spec)
+{
+    /* forms: all | none | tcp:443 | connect:443 | bind:8080 | 443 */
+    char buf[4096], *p, *q;
+
+    if (!spec || !*spec) return;
+    snprintf(buf, sizeof(buf), "%s", spec);
+
+    if (strcmp(buf, "all") == 0) { cfg_net_all = 1; cfg_net_any = 1; return; }
+    if (strcmp(buf, "none") == 0) return;
+
+    p = buf;
+    while (p && *p) {
+        int bind = 0;
+        unsigned port;
+        q = strchr(p, ',');
+        if (q) *q = 0;
+        while (*p == ' ') p++;
+        if (strncmp(p, "bind:", 5) == 0)         { bind = 1; p += 5; }
+        else if (strncmp(p, "connect:", 8) == 0) { p += 8; }
+        else if (strncmp(p, "tcp:", 4) == 0)     { p += 4; }
+        port = (unsigned)strtoul(p, NULL, 10);
+        if (port > 0 && port < 65536 && nnetports < OB_MAX_PORTS) {
+            netports[nnetports].port = port;
+            netports[nnetports].bind = bind;
+            nnetports++;
+            cfg_net_any = 1;
+        }
+        p = q ? q + 1 : NULL;
+    }
+}
+
+static void set_opt(const char *key, const char *val)
+{
+    int on = (strcmp(val, "1") == 0 || strcmp(val, "yes") == 0 ||
+              strcmp(val, "on") == 0 || strcmp(val, "true") == 0);
+
+    if      (strcmp(key, "scope_ipc") == 0)  cfg_scope_ipc = on;
+    else if (strcmp(key, "memfd") == 0)      cfg_memfd_deny = (strcmp(val, "deny") == 0 || on);
+    else if (strcmp(key, "nested_ns") == 0)  cfg_nested_ns = on;
+    else if (strcmp(key, "keep_caps") == 0)  cfg_keep_caps = on;
+    else if (strcmp(key, "keep_fds") == 0)   cfg_keep_fds = on;
+    else if (strcmp(key, "no_seccomp") == 0) cfg_no_seccomp = on;
+    else if (strcmp(key, "no_landlock") == 0)cfg_no_landlock = on;
+    else if (strcmp(key, "defaults") == 0)   cfg_defaults = on;
+    else if (strcmp(key, "hard_fail") == 0)  cfg_hard_fail = on;
+    else if (strcmp(key, "verbose") == 0)    cfg_verbose = on;
+}
+
+static void read_profile(const char *path)
+{
+    FILE *f = fopen(path, "r");
+    char line[4096];
+
+    if (!f) {
+        warn("profile %s cannot be read: %s", path, strerror(errno));
+        return;
+    }
+
+    while (fgets(line, sizeof(line), f)) {
+        char *eq, *key, *val, *nl;
+        nl = strpbrk(line, "\r\n");
+        if (nl) *nl = 0;
+        key = line;
+        while (*key == ' ' || *key == '\t') key++;
+        if (*key == '#' || *key == 0) continue;
+        eq = strchr(key, '=');
+        if (!eq) continue;
+        *eq = 0;
+        val = eq + 1;
+
+        if      (strcmp(key, "allow.ro") == 0)   add_grant(val, OB_RO);
+        else if (strcmp(key, "allow.rx") == 0)   add_grant(val, OB_RX);
+        else if (strcmp(key, "allow.rw") == 0)   add_grant(val, OB_RW);
+        else if (strcmp(key, "allow.rwx") == 0)  add_grant(val, OB_RWX);
+        else if (strcmp(key, "allow.dev") == 0)  add_grant(val, OB_DEV);
+        else if (strcmp(key, "allow.exec") == 0) add_grant(val, OB_RX);
+        else if (strcmp(key, "allow.net") == 0)  add_net_grant(val);
+        else if (strcmp(key, "deny") == 0)       add_deny(val);
+        else if (strncmp(key, "opt.", 4) == 0)   set_opt(key + 4, val);
+    }
+    fclose(f);
+    vlog("profile loaded: %s", path);
+}
+
+/* The hard-deny set. These are never granted, and any grant that
+ * contains one of them is pruned around it rather than honoured.
+ * This is the one place in the design that names specific paths,
+ * and it exists as a backstop, not as the policy. */
+static const char *hard_deny[] = {
+    "/dev/mem", "/dev/kmem", "/dev/port", "/dev/kmsg", "/dev/mtd",
+    "/dev/cpu",            /* /dev/cpu/N/msr - model specific registers */
+    "/dev/kvm", "/dev/vfio", "/dev/vhost-net", "/dev/vhost-vsock",
+    "/dev/watchdog", "/dev/watchdog0", "/dev/rtc", "/dev/rtc0",
+    "/dev/nvram", "/dev/tpm0", "/dev/tpmrm0", "/dev/sgx_vepc",
+    "/dev/fuse", "/dev/loop-control", "/dev/mapper", "/dev/btrfs-control",
+    "/proc/kcore", "/proc/kallsyms", "/proc/kmsg", "/proc/sysrq-trigger",
+    "/proc/config.gz", "/proc/vmcore", "/proc/mtrr", "/proc/sched_debug",
+    "/proc/timer_list", "/proc/keys", "/proc/key-users", "/proc/slabinfo",
+    "/proc/modules", "/proc/iomem", "/proc/ioports",
+    "/sys/kernel/debug", "/sys/kernel/tracing", "/sys/firmware/efi/efivars",
+    "/sys/power",
+    "/etc/shadow", "/etc/gshadow", "/etc/sudoers", "/etc/sudoers.d",
+    "/etc/ssh", "/etc/ssl/private", "/etc/wpa_supplicant",
+    "/etc/NetworkManager/system-connections",
+    "/root", "/boot", "/var/log", "/var/backups",
+    NULL
+};
+
+/* Block device families are matched by prefix because they are
+ * numbered: sda, sdb, nvme0n1, nvme0n1p3 and so on. */
+static const char *hard_deny_prefix[] = {
+    "/dev/sd", "/dev/nvme", "/dev/hd", "/dev/vd", "/dev/xvd",
+    "/dev/mmcblk", "/dev/loop", "/dev/dm-", "/dev/md", "/dev/sr",
+    "/dev/sg", "/dev/nbd", "/dev/zram", "/dev/mtdblock",
+    NULL
+};
+
+static void seed_hard_deny(void)
+{
+    DIR *d;
+    struct dirent *e;
+    int i;
+
+    for (i = 0; hard_deny[i]; i++) add_deny(hard_deny[i]);
+
+    /* Expand the block-device prefixes against what actually exists
+     * on this machine. This is the same enumeration discipline the
+     * manifest generator uses for metadata: look at the real host,
+     * then write the rule for what is really there. */
+    d = opendir("/dev");
+    if (!d) return;
+    while ((e = readdir(d)) != NULL) {
+        char full[PATH_MAX];
+        if ((size_t)snprintf(full, sizeof(full), "/dev/%s", e->d_name)
+            >= sizeof(full))
+            continue;
+        for (i = 0; hard_deny_prefix[i]; i++) {
+            if (strncmp(full, hard_deny_prefix[i],
+                        strlen(hard_deny_prefix[i])) == 0) {
+                add_deny(full);
+                break;
+            }
+        }
+    }
+    closedir(d);
+}
+
+/* The base allow-list: what any graphical application on a Linux
+ * system provably needs in order to start at all. Everything here
+ * is read-only or read-execute except the app's own writable
+ * directories. It is deliberately small, and it is the floor, not
+ * the policy: the per-app profile adds the rest. */
+static void seed_defaults(const char *appbin)
+{
+    static const char *ro[] = {
+        "/usr/share", "/usr/local/share", "/etc/fonts", "/etc/ssl",
+        "/etc/ca-certificates", "/etc/ca-certificates.conf",
+        "/etc/resolv.conf", "/etc/hosts", "/etc/hostname",
+        "/etc/nsswitch.conf", "/etc/passwd", "/etc/group",
+        "/etc/localtime", "/etc/timezone", "/etc/machine-id",
+        "/etc/os-release", "/etc/ld.so.cache", "/etc/ld.so.conf",
+        "/etc/ld.so.conf.d", "/etc/ld-musl-x86_64.path",
+        "/etc/xdg", "/etc/gtk-3.0", "/etc/gtk-2.0", "/etc/pango",
+        "/etc/mime.types", "/etc/alternatives", "/etc/pki",
+        "/etc/terminfo", "/etc/profile.d", "/etc/dconf",
+        "/etc/apparmor.d", "/etc/nvidia", "/etc/vulkan", "/etc/drirc",
+        "/etc/asound.conf", "/etc/pulse", "/etc/pipewire",
+        "/proc", "/sys",
+        NULL
+    };
+    static const char *rx[] = {
+        "/lib", "/lib64", "/usr/lib", "/usr/lib64", "/usr/lib32",
+        "/usr/libexec", "/usr/local/lib", "/opt/obsidian/lib",
+        NULL
+    };
+    static const char *rw[] = {
+        "~", "/tmp", "/var/tmp", "/dev/shm", "$XDG_RUNTIME_DIR",
+        NULL
+    };
+    static const char *dev[] = {
+        "/dev/null", "/dev/zero", "/dev/full", "/dev/random",
+        "/dev/urandom", "/dev/tty", "/dev/ptmx", "/dev/pts",
+        "/dev/console", "/dev/fd", "/dev/stdin", "/dev/stdout",
+        "/dev/stderr", "/dev/dri",
+        NULL
+    };
+    int i;
+
+    for (i = 0; ro[i];  i++) add_grant(ro[i],  OB_RO);
+    for (i = 0; rx[i];  i++) add_grant(rx[i],  OB_RX);
+    for (i = 0; rw[i];  i++) add_grant(rw[i],  OB_RW);
+    for (i = 0; dev[i]; i++) add_grant(dev[i], OB_DEV);
+
+    if (appbin && *appbin) add_grant(appbin, OB_RX);
+}
+
+/* Resolve the target command to an absolute path so the one binary
+ * the app is allowed to execute can be named exactly. */
+static int resolve_binary(const char *cmd, char *out, size_t outsz)
+{
+    char cand[PATH_MAX], real[PATH_MAX];
+    const char *path, *p, *q;
+
+    if (strchr(cmd, '/')) {
+        if (!realpath(cmd, real)) return -1;
+        snprintf(out, outsz, "%s", real);
+        return 0;
+    }
+
+    path = getenv("PATH");
+    if (!path || !*path) path = "/usr/local/bin:/usr/bin:/bin";
+
+    for (p = path; *p; p = (*q == ':') ? q + 1 : q) {
+        size_t n;
+        q = strchr(p, ':');
+        if (!q) q = p + strlen(p);
+        n = (size_t)(q - p);
+        if (n == 0) { if (!*q) break; continue; }
+        if (n + 1 + strlen(cmd) + 1 > sizeof(cand)) { if (!*q) break; continue; }
+        memcpy(cand, p, n);
+        cand[n] = '/';
+        strcpy(cand + n + 1, cmd);
+        if (access(cand, X_OK) == 0 && realpath(cand, real)) {
+            snprintf(out, outsz, "%s", real);
+            return 0;
+        }
+        if (!*q) break;
+    }
+    return -1;
+}
+
+/* An app binary sitting in a general purpose bin directory gets a
+ * grant on the file, never on the directory. An app that lives in
+ * its own tree, /opt/foo or /usr/lib/foo, gets the tree, because
+ * that is where its helper processes are. */
+static void grant_app_tree(const char *binpath)
+{
+    static const char *general[] = {
+        "/bin", "/sbin", "/usr/bin", "/usr/sbin",
+        "/usr/local/bin", "/usr/local/sbin", NULL
+    };
+    char dir[PATH_MAX];
+    char *slash;
+    int i;
+
+    snprintf(dir, sizeof(dir), "%s", binpath);
+    slash = strrchr(dir, '/');
+    if (!slash || slash == dir) return;
+    *slash = 0;
+
+    for (i = 0; general[i]; i++)
+        if (strcmp(dir, general[i]) == 0) return;
+
+    add_grant(dir, OB_RX);
+}
+
+static void print_plan(char **argv, int sep)
+{
+    int i;
+    fprintf(stderr,
+        "\n"
+        "  OBSIDIAN STRICT BOUNDARY - plan\n"
+        "  -------------------------------------------------------------\n"
+        "  target        : %s\n"
+        "  landlock ABI  : %d\n"
+        "  fs policy     : default-deny, %d explicit grants\n"
+        "  network       : %s\n"
+        "  ipc scoping   : %s\n"
+        "  namespaces    : %s\n"
+        "  capabilities  : %s\n"
+        "  memfd         : %s\n"
+        "  fd scrub      : %s\n"
+        "  hard-deny set : %d paths\n"
+        "  -------------------------------------------------------------\n",
+        argv[sep + 1],
+        landlock_abi,
+        ngrants,
+        cfg_net_all ? "unrestricted (allow.net=all)"
+                    : cfg_net_any ? "granted ports only" : "denied",
+        cfg_scope_ipc == 1 ? "abstract unix sockets and signals confined"
+                           : "not scoped",
+        cfg_nested_ns ? "permitted" : "denied",
+        cfg_keep_caps ? "kept" : "dropped",
+        cfg_memfd_deny ? "denied" : "allowed, MFD_EXEC denied",
+        cfg_keep_fds ? "off" : "on",
+        ndenies);
+    for (i = 0; i < 0; i++) { }
+}
+
+static void usage(const char *self)
+{
+    fprintf(stderr,
+        "usage: %s [--print-plan] [--verbose] -- <command> [args...]\n"
+        "\n"
+        "Enforces the Obsidian strict boundary on <command>. Inert unless\n"
+        "OBSIDIAN_HARDEN is set to 1, strict or paranoid.\n", self);
+}
+
+int main(int argc, char **argv)
+{
+    const char *v;
+    char binpath[PATH_MAX];
+    int i, sep = -1;
+
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--") == 0) { sep = i; break; }
+        if (strcmp(argv[i], "--print-plan") == 0) { cfg_plan_only = 1; continue; }
+        if (strcmp(argv[i], "--verbose") == 0)    { cfg_verbose = 1; continue; }
+        if (strcmp(argv[i], "--version") == 0) {
+            printf("obsidian-harden (Obsidian Mirror strict boundary) 1.0\n");
+            return 0;
+        }
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            usage(argv[0]);
+            return 0;
+        }
+    }
+
+    if (sep < 0 || sep + 1 >= argc) { usage(argv[0]); return 2; }
+
+    /* ---- is hardening on at all ---- */
+    v = getenv("OBSIDIAN_HARDEN");
+    if (v && *v) {
+        if (strcmp(v, "1") == 0 || strcmp(v, "on") == 0 ||
+            strcmp(v, "strict") == 0 || strcmp(v, "yes") == 0)
+            cfg_enabled = 1;
+        else if (strcmp(v, "paranoid") == 0)
+            cfg_enabled = 2;
+        else if (strcmp(v, "plan") == 0 || strcmp(v, "dry") == 0) {
+            cfg_enabled = 1;
+            cfg_plan_only = 1;
+        }
+    }
+
+    if (!cfg_enabled && !cfg_plan_only) {
+        /* Off. Behave exactly like exec, and cost one exec. */
+        execvp(argv[sep + 1], &argv[sep + 1]);
+        fprintf(stderr, "obsidian-harden: exec %s: %s\n",
+                argv[sep + 1], strerror(errno));
+        return 127;
+    }
+
+    if (getenv("OBSIDIAN_HARDEN_VERBOSE")) cfg_verbose = 1;
+    if (getenv("OBSIDIAN_VERBOSE"))        cfg_verbose = 1;
+    if (getenv("OBSIDIAN_HARDEN_FAIL_CLOSED")) cfg_hard_fail = 1;
+
+    if (cfg_enabled == 2) {          /* paranoid raises three defaults */
+        cfg_memfd_deny = 1;
+        if (cfg_scope_ipc < 0) cfg_scope_ipc = 1;
+    }
+
+    /* ---- resolve what we are about to run ---- */
+    if (resolve_binary(argv[sep + 1], binpath, sizeof(binpath)) != 0) {
+        warn("cannot resolve %s on PATH; hardening would deny its own "
+             "target, refusing to guess", argv[sep + 1]);
+        if (cfg_hard_fail) return 126;
+        snprintf(binpath, sizeof(binpath), "%s", argv[sep + 1]);
+    }
+
+    /* ---- build the policy ---- */
+    seed_hard_deny();
+    add_deny_list(getenv("OBSIDIAN_DENY_PATHS"));
+
+    v = getenv("OBSIDIAN_HARDEN_PROFILE");
+    if (v && *v) read_profile(v);
+
+    if (getenv("OBSIDIAN_HARDEN_NO_DEFAULTS")) cfg_defaults = 0;
+    if (cfg_defaults) seed_defaults(binpath);
+    grant_app_tree(binpath);
+
+    add_list(getenv("OBSIDIAN_ALLOW_PATHS_RO"),  OB_RO);
+    add_list(getenv("OBSIDIAN_ALLOW_PATHS_RX"),  OB_RX);
+    add_list(getenv("OBSIDIAN_ALLOW_PATHS_RW"),  OB_RW);
+    add_list(getenv("OBSIDIAN_ALLOW_PATHS_RWX"), OB_RWX);
+    add_list(getenv("OBSIDIAN_ALLOW_DEV"),       OB_DEV);
+    add_list(getenv("OBSIDIAN_ALLOW_EXEC"),      OB_RX);
+    add_net_grant(getenv("OBSIDIAN_ALLOW_NET"));
+
+    v = getenv("OBSIDIAN_SCOPE_IPC");
+    if (v && *v) cfg_scope_ipc = (*v == '1');
+    if (cfg_scope_ipc < 0) {
+        /* Auto: scoping abstract unix sockets breaks X11 clients,
+         * which reach the display through an abstract socket. On a
+         * pure Wayland session there is nothing to break. */
+        const char *disp = getenv("DISPLAY");
+        cfg_scope_ipc = (disp && *disp) ? 0 : 1;
+    }
+    if (getenv("OBSIDIAN_ALLOW_NESTED_NS")) cfg_nested_ns = 1;
+    if (getenv("OBSIDIAN_HARDEN_KEEP_CAPS")) cfg_keep_caps = 1;
+    if (getenv("OBSIDIAN_HARDEN_KEEP_FDS")) cfg_keep_fds = 1;
+
+    /* ---- apply, outermost layer first ---- */
+
+    if (!cfg_keep_fds && !cfg_plan_only) scrub_fds();
+
+    /* NO_NEW_PRIVS must be set before Landlock will accept an
+     * unprivileged restriction, and it is what stops a setuid
+     * binary from shedding every layer below. */
+    if (!cfg_plan_only) {
+        if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) {
+            warn("PR_SET_NO_NEW_PRIVS failed: %s", strerror(errno));
+            if (cfg_hard_fail) return 126;
+        } else {
+            vlog("privilege boundary sealed: no_new_privs");
+        }
+    }
+
+    if (!cfg_no_landlock) {
+        if (landlock_apply() != 0 && cfg_hard_fail) return 126;
+    }
+
+    if (cfg_plan_only) print_plan(argv, sep);
+
+    if (!cfg_keep_caps && !cfg_plan_only) {
+        if (caps_drop() != 0 && cfg_hard_fail) return 126;
+    }
+
+    if (!cfg_no_seccomp) {
+        if (seccomp_apply() != 0 && cfg_hard_fail) return 126;
+    }
+
+    if (cfg_plan_only) {
+        fprintf(stderr, "  nothing was enforced: this was a plan run.\n\n");
+        return 0;
+    }
+
+    execvp(argv[sep + 1], &argv[sep + 1]);
+    fprintf(stderr, "obsidian-harden: exec %s: %s\n",
+            argv[sep + 1], strerror(errno));
+    if (errno == EACCES)
+        fprintf(stderr,
+            "obsidian-harden: the boundary denied execution of the target "
+            "itself.\n"
+            "                 Grant it with OBSIDIAN_ALLOW_EXEC=%s\n",
+            binpath);
+    return 127;
+}
+OBSIDIAN_PAYLOAD_HARDEN_C
+ok "src/obsidian_harden.c"
+
+cat > "$SRCDIR/obsidian_hardenprobe.c" <<'OBSIDIAN_PAYLOAD_HARDENPROBE_C'
+/* ============================================================
+ * /opt/obsidian/bin/obsidian-hardenprobe
+ * Obsidian Mirror - strict-boundary measurement probe.
+ *
+ * Attempts, in process, every access the strict boundary claims
+ * to close, and prints what actually happened. It asserts
+ * nothing: it runs the syscall and reports the kernel's answer.
+ *
+ * Run it twice - once through the normal launcher, once with
+ * OBSIDIAN_HARDEN=1 - and the difference between the two columns
+ * is the measured value of the boundary. A claim that appears in
+ * both columns as ALLOWED is a claim this project has not earned.
+ *
+ * Output: one record per line,  key <TAB> state <TAB> detail
+ *   state = ALLOWED | DENIED | ABSENT | KILLED | ERROR
+ *
+ * Build: cc -O2 -o obsidian-hardenprobe obsidian_hardenprobe.c
+ * ============================================================ */
+
+#define _GNU_SOURCE
+#include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <limits.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/mman.h>
+#include <sys/prctl.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/syscall.h>
+#include <sys/types.h>
+#include <sys/uio.h>
+#include <sys/wait.h>
+#include <signal.h>
+
+#ifndef PR_GET_NO_NEW_PRIVS
+#define PR_GET_NO_NEW_PRIVS 39
+#endif
+#ifndef PR_CAPBSET_READ
+#define PR_CAPBSET_READ 23
+#endif
+#ifndef AT_EMPTY_PATH
+#define AT_EMPTY_PATH 0x1000
+#endif
+#ifndef CLONE_NEWUSER
+#define CLONE_NEWUSER 0x10000000
+#endif
+
+static int nallowed, ndenied, nother;
+static int ob_limit = -1;   /* debug aid: stop after N records */
+
+static const char *errname(int e)
+{
+    switch (e) {
+    case EPERM:          return "EPERM";
+    case EACCES:         return "EACCES";
+    case ENOSYS:         return "ENOSYS";
+    case ENOENT:         return "ENOENT";
+    case EAFNOSUPPORT:   return "EAFNOSUPPORT";
+    case EINVAL:         return "EINVAL";
+    case EOPNOTSUPP:     return "EOPNOTSUPP";
+    case ENODEV:         return "ENODEV";
+    case EROFS:          return "EROFS";
+    case EBUSY:          return "EBUSY";
+    case ESRCH:          return "ESRCH";
+    case ENXIO:          return "ENXIO";
+    default:             return "other";
+    }
+}
+
+static void rec(const char *key, const char *state, const char *detail)
+{
+    printf("%s\t%s\t%s\n", key, state, detail ? detail : "");
+    if      (strcmp(state, "ALLOWED") == 0) nallowed++;
+    else if (strcmp(state, "DENIED")  == 0 || strcmp(state, "KILLED") == 0)
+        ndenied++;
+    else nother++;
+    if (ob_limit > 0 && nallowed + ndenied + nother >= ob_limit) {
+        fflush(stdout);
+        _exit(0);
+    }
+}
+
+/* A syscall that returned -1 with a refusal errno counts as denied.
+ * ENOENT and ENODEV mean the surface is not on this machine, which
+ * is reported separately so it is never mistaken for protection. */
+static void rec_rc(const char *key, long rc, int e)
+{
+    if (rc >= 0) { rec(key, "ALLOWED", ""); return; }
+    switch (e) {
+    case EPERM: case EACCES: case EAFNOSUPPORT: case ENOSYS:
+    case EOPNOTSUPP: case EROFS:
+        rec(key, "DENIED", errname(e));
+        break;
+    case ENOENT: case ENODEV: case ENXIO:
+        rec(key, "ABSENT", errname(e));
+        break;
+    default:
+        rec(key, "ERROR", errname(e));
+        break;
+    }
+}
+
+/* ---------- filesystem ---------- */
+
+static void probe_open(const char *key, const char *path, int flags)
+{
+    int fd = open(path, flags);
+    if (fd >= 0) { close(fd); rec(key, "ALLOWED", path); return; }
+    rec_rc(key, -1, errno);
+}
+
+static void probe_create(const char *key, const char *dir)
+{
+    char p[PATH_MAX];
+    int fd;
+    snprintf(p, sizeof(p), "%s/.obsidian-harden-probe", dir);
+    fd = open(p, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd >= 0) { close(fd); unlink(p); rec(key, "ALLOWED", dir); return; }
+    rec_rc(key, -1, errno);
+}
+
+static void probe_first_disk(void)
+{
+    static const char *pref[] = { "sd", "nvme", "vd", "mmcblk", "xvd", NULL };
+    DIR *d = opendir("/dev");
+    struct dirent *e;
+    char found[PATH_MAX];
+    int i, have = 0;
+
+    if (!d) {
+        /* /dev itself not being listable is a result, not a gap: it
+         * means the boundary never granted the directory. */
+        if (errno == EACCES || errno == EPERM)
+            rec("fs.read.rawdisk", "DENIED", "/dev not listable");
+        else
+            rec("fs.read.rawdisk", "ABSENT", "cannot list /dev");
+        return;
+    }
+    while (!have && (e = readdir(d)) != NULL) {
+        for (i = 0; pref[i]; i++) {
+            size_t n = strlen(pref[i]);
+            if (strncmp(e->d_name, pref[i], n) == 0 &&
+                e->d_name[n] >= '0' && e->d_name[n] <= '9') {
+                snprintf(found, sizeof(found), "/dev/%s", e->d_name);
+                have = 1;
+                break;
+            }
+        }
+    }
+    closedir(d);
+    if (!have) { rec("fs.read.rawdisk", "ABSENT", "no block node visible"); return; }
+    probe_open("fs.read.rawdisk", found, O_RDONLY);
+}
+
+/* ---------- execution ---------- */
+
+static void probe_exec(const char *key, const char *path)
+{
+    pid_t pid;
+    int status;
+    char *const av[] = { (char *)path, (char *)"-c", (char *)":", NULL };
+
+    if (access(path, F_OK) != 0) { rec(key, "ABSENT", path); return; }
+
+    pid = fork();
+    if (pid < 0) { rec(key, "ERROR", "fork"); return; }
+    if (pid == 0) {
+        /* Detach the child from this program's descriptors and put a
+         * hard stop on it. Whether the interpreter would then sit
+         * waiting on a terminal is not the question being asked: the
+         * question is only whether execv() was permitted. */
+        int devnull = open("/dev/null", O_RDWR);
+        setsid();                      /* no controlling terminal, so an
+                                        * interpreter cannot stop itself
+                                        * on SIGTTIN and hang the probe */
+        if (devnull >= 0) {
+            dup2(devnull, 0); dup2(devnull, 1); dup2(devnull, 2);
+            if (devnull > 2) close(devnull);
+        }
+        alarm(2);
+        execv(path, av);
+        _exit(errno == EACCES ? 90 : errno == EPERM ? 91 : 92);
+    }
+    if (waitpid(pid, &status, WUNTRACED) < 0) {
+        rec(key, "ERROR", "wait");
+        return;
+    }
+    if (WIFSTOPPED(status)) {
+        /* Ran far enough to be stopped: it executed. */
+        kill(pid, SIGKILL);
+        waitpid(pid, &status, 0);
+        rec(key, "ALLOWED", path);
+        return;
+    }
+    if (WIFSIGNALED(status)) {
+        /* SIGALRM means the program was running when the stop hit it,
+         * so the execution itself was permitted. */
+        rec(key, WTERMSIG(status) == SIGALRM ? "ALLOWED" : "KILLED",
+            WTERMSIG(status) == SIGALRM ? path : "signal");
+        return;
+    }
+    switch (WEXITSTATUS(status)) {
+    case 90: rec(key, "DENIED", "EACCES"); break;
+    case 91: rec(key, "DENIED", "EPERM");  break;
+    case 92: rec(key, "ABSENT", "exec errno"); break;
+    default: rec(key, "ALLOWED", path);    break;
+    }
+}
+
+static void probe_memfd_exec(void)
+{
+#ifdef __NR_memfd_create
+    /* The canonical fileless-execution pattern: build an executable
+     * in anonymous memory, then run the descriptor. No path exists
+     * at any point, so no path-based policy can see it. */
+    static const unsigned char elf_stub[] = { 0x7f, 'E', 'L', 'F' };
+    int fd = (int)syscall(__NR_memfd_create, "obprobe", 0);
+    pid_t pid;
+    int status;
+
+    if (fd < 0) { rec("exec.memfd", "DENIED", errname(errno)); return; }
+    if (write(fd, elf_stub, sizeof(elf_stub)) < 0) { /* ignore */ }
+
+    pid = fork();
+    if (pid < 0) { close(fd); rec("exec.memfd", "ERROR", "fork"); return; }
+    if (pid == 0) {
+        char *const av[] = { (char *)"obprobe", NULL };
+        char *const ev[] = { NULL };
+        syscall(__NR_execveat, fd, "", av, ev, AT_EMPTY_PATH);
+        _exit(errno == EACCES ? 90 : errno == EPERM ? 91 :
+              errno == ENOEXEC ? 93 : 92);
+    }
+    waitpid(pid, &status, 0);
+    close(fd);
+    switch (WEXITSTATUS(status)) {
+    case 90: rec("exec.memfd", "DENIED", "EACCES"); break;
+    case 91: rec("exec.memfd", "DENIED", "EPERM");  break;
+    /* ENOEXEC means the kernel accepted the request and only the
+     * four-byte stub was not a real program: the door was open. */
+    case 93: rec("exec.memfd", "ALLOWED", "reached ELF loader"); break;
+    default: rec("exec.memfd", "ERROR", "unexpected"); break;
+    }
+#else
+    rec("exec.memfd", "ABSENT", "no memfd_create");
+#endif
+}
+
+static void probe_jit(void)
+{
+    /* Positive control. A boundary that breaks legitimate JIT has
+     * broken every browser and every managed runtime, so this one
+     * must stay ALLOWED. */
+    size_t sz = 4096;
+    void *p = mmap(NULL, sz, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) { rec("jit.anon_exec", "ERROR", "mmap"); return; }
+    if (mprotect(p, sz, PROT_READ | PROT_EXEC) != 0) {
+        rec("jit.anon_exec", "DENIED", errname(errno));
+        munmap(p, sz);
+        return;
+    }
+    munmap(p, sz);
+    rec("jit.anon_exec", "ALLOWED", "anonymous PROT_EXEC");
+}
+
+/* ---------- memory of other processes ----------
+ *
+ * Every cross-process probe runs against a throwaway child of this
+ * program, never against the shell that started it. Attaching a
+ * debugger to your own parent and then failing to detach cleanly
+ * leaves that parent stopped, which is a real way to hang a
+ * terminal - measurement must not damage the thing it measures.
+ */
+
+static pid_t victim_pid = -1;
+
+static void victim_start(void)
+{
+    victim_pid = fork();
+    if (victim_pid == 0) {
+        signal(SIGALRM, SIG_DFL);
+        alarm(10);            /* never outlive the probe */
+        for (;;) pause();
+    }
+    if (victim_pid > 0) usleep(20000);
+}
+
+static void victim_stop(void)
+{
+    int st;
+    if (victim_pid <= 0) return;
+    kill(victim_pid, SIGKILL);
+    waitpid(victim_pid, &st, 0);
+    victim_pid = -1;
+}
+
+static void probe_ptrace(void)
+{
+#ifdef __NR_ptrace
+    long rc;
+    int st;
+
+    if (victim_pid <= 0) { rec("mem.ptrace", "ERROR", "no target"); return; }
+
+    rc = syscall(__NR_ptrace, 16 /* PTRACE_ATTACH */, (long)victim_pid, 0L, 0L);
+    if (rc == 0) {
+        /* Wait for the stop before detaching, or the target is left
+         * frozen. */
+        waitpid(victim_pid, &st, WUNTRACED);
+        syscall(__NR_ptrace, 17 /* PTRACE_DETACH */, (long)victim_pid, 0L, 0L);
+        kill(victim_pid, SIGCONT);
+        rec("mem.ptrace", "ALLOWED", "attached to another process");
+        return;
+    }
+    rec_rc("mem.ptrace", -1, errno);
+#else
+    rec("mem.ptrace", "ABSENT", "");
+#endif
+}
+
+static void probe_vm_readv(void)
+{
+#ifdef __NR_process_vm_readv
+    char buf[16];
+    struct iovec l = { buf, sizeof(buf) };
+    struct iovec r = { (void *)(uintptr_t)0x1000, sizeof(buf) };
+    long rc;
+
+    if (victim_pid <= 0) { rec("mem.process_vm_readv", "ERROR", "no target"); return; }
+
+    rc = syscall(__NR_process_vm_readv, (long)victim_pid, &l, 1L, &r, 1L, 0L);
+    /* EFAULT means the call was permitted and only the remote address
+     * was wrong: the interface is open. */
+    if (rc >= 0 || errno == EFAULT || errno == ESRCH)
+        rec("mem.process_vm_readv", "ALLOWED", rc >= 0 ? "read" : "reached");
+    else
+        rec_rc("mem.process_vm_readv", -1, errno);
+#else
+    rec("mem.process_vm_readv", "ABSENT", "");
+#endif
+}
+
+static void probe_vm_writev(void)
+{
+#ifdef __NR_process_vm_writev
+    char buf[16];
+    struct iovec l = { buf, sizeof(buf) };
+    struct iovec r = { (void *)(uintptr_t)0x1000, sizeof(buf) };
+    long rc;
+
+    memset(buf, 0, sizeof(buf));
+    if (victim_pid <= 0) { rec("mem.process_vm_writev", "ERROR", "no target"); return; }
+
+    rc = syscall(__NR_process_vm_writev, (long)victim_pid, &l, 1L, &r, 1L, 0L);
+    if (rc >= 0 || errno == EFAULT || errno == ESRCH)
+        rec("mem.process_vm_writev", "ALLOWED", rc >= 0 ? "wrote" : "reached");
+    else
+        rec_rc("mem.process_vm_writev", -1, errno);
+#else
+    rec("mem.process_vm_writev", "ABSENT", "");
+#endif
+}
+
+static void probe_peer_maps(void)
+{
+    /* Reading another process's address space through procfs needs no
+     * exotic syscall at all, which is why the memory layer is not
+     * finished by seccomp alone. */
+    char path[64];
+    int fd;
+
+    if (victim_pid <= 0) { rec("mem.peer_mem", "ERROR", "no target"); return; }
+    snprintf(path, sizeof(path), "/proc/%d/mem", (int)victim_pid);
+    fd = open(path, O_RDONLY);
+    if (fd >= 0) { close(fd); rec("mem.peer_mem", "ALLOWED", path); return; }
+    rec_rc("mem.peer_mem", -1, errno);
+}
+
+/* ---------- generic raw syscall probes ---------- */
+
+static void probe_raw(const char *key, long nr, long a, long b, long c,
+                      long d, long e, long f)
+{
+    long rc;
+    if (nr < 0) { rec(key, "ABSENT", "not on this arch"); return; }
+    errno = 0;
+    rc = syscall(nr, a, b, c, d, e, f);
+    if (rc >= 0) { rec(key, "ALLOWED", ""); return; }
+    /* EINVAL/EBADF/EFAULT: the filter let the call through to the
+     * kernel, which then rejected the deliberately bogus arguments.
+     * That is an open interface, not a closed one. */
+    if (errno == EINVAL || errno == EBADF || errno == EFAULT ||
+        errno == ESRCH  || errno == EBUSY || errno == ENOTDIR)
+        rec(key, "ALLOWED", errname(errno));
+    else
+        rec_rc(key, -1, errno);
+}
+
+/* Something the filter answers with SIGSYS has to be tried in a
+ * child, or the measurement kills the measurer. */
+static void probe_raw_forked(const char *key, long nr, long a, long b, long c)
+{
+    pid_t pid;
+    int status;
+
+    if (nr < 0) { rec(key, "ABSENT", "not on this arch"); return; }
+    pid = fork();
+    if (pid < 0) { rec(key, "ERROR", "fork"); return; }
+    if (pid == 0) {
+        long rc = syscall(nr, a, b, c);
+        if (rc >= 0) _exit(0);
+        _exit(errno == EPERM ? 91 : errno == EACCES ? 90 :
+              errno == ENOSYS ? 94 : 92);
+    }
+    waitpid(pid, &status, 0);
+    if (WIFSIGNALED(status)) { rec(key, "KILLED", "SIGSYS"); return; }
+    switch (WEXITSTATUS(status)) {
+    case 0:  rec(key, "ALLOWED", ""); break;
+    case 90: rec(key, "DENIED", "EACCES"); break;
+    case 91: rec(key, "DENIED", "EPERM"); break;
+    case 94: rec(key, "DENIED", "ENOSYS"); break;
+    default: rec(key, "ERROR", "errno"); break;
+    }
+}
+
+static void probe_unshare(void)
+{
+#ifdef __NR_unshare
+    pid_t pid = fork();
+    int status;
+    if (pid < 0) { rec("ns.unshare_user", "ERROR", "fork"); return; }
+    if (pid == 0) {
+        long rc = syscall(__NR_unshare, (long)CLONE_NEWUSER);
+        _exit(rc == 0 ? 0 : errno == EPERM ? 91 : 92);
+    }
+    waitpid(pid, &status, 0);
+    switch (WEXITSTATUS(status)) {
+    case 0:  rec("ns.unshare_user", "ALLOWED", "new user namespace"); break;
+    case 91: rec("ns.unshare_user", "DENIED", "EPERM"); break;
+    default: rec("ns.unshare_user", "ERROR", "errno"); break;
+    }
+#else
+    rec("ns.unshare_user", "ABSENT", "");
+#endif
+}
+
+/* ---------- network ---------- */
+
+static void probe_socket(const char *key, int domain, int type)
+{
+    int fd = socket(domain, type, 0);
+    if (fd >= 0) { close(fd); rec(key, "ALLOWED", ""); return; }
+    rec_rc(key, -1, errno);
+}
+
+static void probe_connect_out(void)
+{
+    /* Reaching a routable address at all, not whether anything
+     * answers. EAFNOSUPPORT/EPERM/EACCES at any stage is closed. */
+    int fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
+    struct sockaddr_in { short f; unsigned short p; unsigned int a; char z[8]; } sa;
+    if (fd < 0) { rec_rc("net.connect_tcp", -1, errno); return; }
+    memset(&sa, 0, sizeof(sa));
+    sa.f = AF_INET;
+    sa.p = (unsigned short)((443 >> 8) | (443 << 8));
+    sa.a = 0x08080808;   /* 8.8.8.8, big endian as written */
+    if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) == 0) {
+        close(fd);
+        rec("net.connect_tcp", "ALLOWED", "connected");
+        return;
+    }
+    if (errno == EACCES || errno == EPERM || errno == EAFNOSUPPORT)
+        rec("net.connect_tcp", "DENIED", errname(errno));
+    else if (errno == EINPROGRESS || errno == ETIMEDOUT ||
+             errno == ECONNREFUSED || errno == EINTR)
+        rec("net.connect_tcp", "ALLOWED", "reached the network stack");
+    else if (errno == ENETUNREACH || errno == EHOSTUNREACH)
+        rec("net.connect_tcp", "ABSENT", "no route from here");
+    else
+        rec("net.connect_tcp", "ERROR", errname(errno));
+    close(fd);
+}
+
+/* ---------- privilege state ---------- */
+
+static void probe_state(void)
+{
+    char buf[256];
+    FILE *f;
+    int v;
+
+    v = prctl(PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0);
+    rec("priv.no_new_privs", v == 1 ? "DENIED" : "ALLOWED",
+        v == 1 ? "set" : "not set");
+
+    /* CAP_SYS_ADMIN is 21. Present in the bounding set means the
+     * process, or anything it becomes, can still ask for it. */
+    v = prctl(PR_CAPBSET_READ, 21, 0, 0, 0);
+    rec("cap.sys_admin_bounding", v == 0 ? "DENIED" : "ALLOWED",
+        v == 0 ? "dropped" : "retained");
+
+    v = prctl(PR_CAPBSET_READ, 0, 0, 0, 0);   /* CAP_CHOWN */
+    rec("cap.chown_bounding", v == 0 ? "DENIED" : "ALLOWED",
+        v == 0 ? "dropped" : "retained");
+
+    /* The bounding set can only be emptied by a process that holds
+     * CAP_SETPCAP. A process holding no capabilities at all cannot
+     * drop it and does not need to, so the effective set is reported
+     * beside it rather than the bounding set alone. */
+    f = fopen("/proc/self/status", "r");
+    if (f) {
+        while (fgets(buf, sizeof(buf), f)) {
+            if (strncmp(buf, "CapEff:", 7) == 0) {
+                unsigned long long capeff = strtoull(buf + 7, NULL, 16);
+                char d[48];
+                snprintf(d, sizeof(d), "CapEff %016llx", capeff);
+                rec("cap.effective_set", capeff == 0 ? "DENIED" : "ALLOWED", d);
+                break;
+            }
+        }
+        fclose(f);
+    }
+
+    f = fopen("/proc/self/status", "r");
+    if (!f) { rec("priv.seccomp_mode", "ERROR", "status unreadable"); return; }
+    while (fgets(buf, sizeof(buf), f)) {
+        if (strncmp(buf, "Seccomp:", 8) == 0) {
+            int mode = atoi(buf + 8);
+            char d[32];
+            snprintf(d, sizeof(d), "mode %d", mode);
+            rec("priv.seccomp_mode", mode == 2 ? "DENIED" : "ALLOWED", d);
+            fclose(f);
+            return;
+        }
+    }
+    fclose(f);
+    rec("priv.seccomp_mode", "ERROR", "field absent");
+}
+
+int main(int argc, char **argv)
+{
+    const char *home = getenv("HOME");
+    int quiet = (argc > 1 && strcmp(argv[1], "--quiet") == 0);
+
+    setvbuf(stdout, NULL, _IOLBF, 0);
+    if (getenv("OBSIDIAN_PROBE_LIMIT"))
+        ob_limit = atoi(getenv("OBSIDIAN_PROBE_LIMIT"));
+
+    /* ---- filesystem: host paths that are not the app's ---- */
+    probe_open("fs.read.shadow",   "/etc/shadow",        O_RDONLY);
+    probe_open("fs.read.sshkeys",  "/etc/ssh",           O_RDONLY | O_DIRECTORY);
+    probe_open("fs.read.roothome", "/root",              O_RDONLY | O_DIRECTORY);
+    probe_open("fs.read.varlog",   "/var/log",           O_RDONLY | O_DIRECTORY);
+    probe_open("fs.read.boot",     "/boot",              O_RDONLY | O_DIRECTORY);
+    probe_open("fs.read.kcore",    "/proc/kcore",        O_RDONLY);
+    probe_open("fs.read.kallsyms", "/proc/kallsyms",     O_RDONLY);
+    probe_open("fs.read.devmem",   "/dev/mem",           O_RDONLY);
+    probe_open("fs.read.devkmsg",  "/dev/kmsg",          O_RDONLY);
+    probe_open("fs.read.iomem",    "/proc/iomem",        O_RDONLY);
+    probe_open("fs.read.modules",  "/proc/modules",      O_RDONLY);
+    probe_open("fs.read.debugfs",  "/sys/kernel/debug",  O_RDONLY | O_DIRECTORY);
+    probe_first_disk();
+    probe_open("fs.write.sysrq",   "/proc/sysrq-trigger", O_WRONLY);
+    probe_create("fs.write.etc",   "/etc");
+    probe_create("fs.write.usr",   "/usr");
+
+    /* ---- filesystem: what the app is supposed to keep ---- */
+    probe_open("fs.read.own_libs", "/usr/lib",           O_RDONLY | O_DIRECTORY);
+    probe_open("fs.read.urandom",  "/dev/urandom",       O_RDONLY);
+    probe_create("fs.write.home",  home && *home ? home : "/tmp");
+    probe_create("fs.write.tmp",   "/tmp");
+
+    /* ---- execution ---- */
+    probe_exec("exec.shell",       "/bin/sh");
+    probe_exec("exec.python",      "/usr/bin/python3");
+    probe_exec("exec.node",        "/usr/bin/node");
+    probe_exec("exec.perl",        "/usr/bin/perl");
+    probe_memfd_exec();
+    probe_jit();
+
+    /* ---- another process's memory ---- */
+    victim_start();
+    probe_ptrace();
+    probe_vm_readv();
+    probe_vm_writev();
+    probe_peer_maps();
+#ifdef __NR_userfaultfd
+    probe_raw("mem.userfaultfd", __NR_userfaultfd, 0, 0, 0, 0, 0, 0);
+#endif
+#ifdef __NR_perf_event_open
+    probe_raw("mem.perf_event_open", __NR_perf_event_open, 0, 0, -1, -1, 0, 0);
+#endif
+#ifdef __NR_pidfd_getfd
+    probe_raw("mem.pidfd_getfd", __NR_pidfd_getfd, -1, 0, 0, 0, 0, 0);
+#endif
+#ifdef __NR_kcmp
+    probe_raw("mem.kcmp", __NR_kcmp, getpid(), getpid(), 0, 0, 0, 0);
+#endif
+    victim_stop();
+
+    /* ---- the logs ---- */
+#ifdef __NR_syslog
+    {
+        /* A real buffer, so the answer is the kernel's policy and not
+         * a complaint about the arguments. */
+        static char ring[256];
+        probe_raw_forked("log.kernel_ring", __NR_syslog,
+                         3 /* SYSLOG_ACTION_READ_ALL */,
+                         (long)ring, (long)sizeof(ring));
+    }
+#endif
+
+    /* ---- kernel surfaces ---- */
+#ifdef __NR_init_module
+    probe_raw("kern.init_module", __NR_init_module, 0, 0, 0, 0, 0, 0);
+#endif
+#ifdef __NR_bpf
+    probe_raw("kern.bpf", __NR_bpf, 0, 0, 0, 0, 0, 0);
+#endif
+#ifdef __NR_io_uring_setup
+    probe_raw("kern.io_uring", __NR_io_uring_setup, 1, 0, 0, 0, 0, 0);
+#endif
+#ifdef __NR_iopl
+    probe_raw_forked("hw.iopl", __NR_iopl, 3, 0, 0);
+#endif
+#ifdef __NR_keyctl
+    probe_raw("key.keyctl", __NR_keyctl, 0, 0, 0, 0, 0, 0);
+#endif
+#ifdef __NR_clock_settime
+    probe_raw("time.clock_settime", __NR_clock_settime, 0, 0, 0, 0, 0, 0);
+#endif
+
+    /* ---- namespaces and mount ---- */
+    probe_unshare();
+#ifdef __NR_mount
+    probe_raw("ns.mount", __NR_mount, (long)"none", (long)"/tmp",
+              (long)"tmpfs", 0, 0, 0);
+#endif
+#ifdef __NR_setns
+    probe_raw("ns.setns", __NR_setns, 0, 0, 0, 0, 0, 0);
+#endif
+#ifdef __NR_open_by_handle_at
+    probe_raw("ns.open_by_handle", __NR_open_by_handle_at, -1, 0, 0, 0, 0, 0);
+#endif
+
+    /* ---- network ---- */
+    probe_socket("net.socket_inet",    AF_INET,   SOCK_STREAM);
+    probe_socket("net.socket_inet6",   AF_INET6,  SOCK_STREAM);
+    probe_socket("net.socket_netlink", AF_NETLINK, SOCK_RAW);
+    probe_socket("net.socket_packet",  17 /* AF_PACKET */, SOCK_RAW);
+    probe_socket("net.socket_unix",    AF_UNIX,   SOCK_STREAM);
+    probe_connect_out();
+
+    /* ---- privilege state ---- */
+    probe_state();
+
+    if (!quiet)
+        fprintf(stderr, "obsidian-hardenprobe: %d allowed, %d denied, "
+                        "%d absent or inconclusive\n",
+                nallowed, ndenied, nother);
+    return 0;
+}
+OBSIDIAN_PAYLOAD_HARDENPROBE_C
+ok "src/obsidian_hardenprobe.c"
+
+cat > "$SRCDIR/obsidian_learn.c" <<'OBSIDIAN_PAYLOAD_LEARN_C'
+/* ============================================================
+ * /opt/obsidian/lib/obsidian_learn.so
+ * Obsidian Mirror - allow-list discovery.
+ *
+ * The installer already enumerates the host to decide what to
+ * spoof. This library is the other half of the same discipline
+ * applied to confinement: instead of guessing what to deny, run
+ * the application once and record what it actually reached for.
+ * The recording is then collapsed into the smallest allow-list
+ * that still contains every real access, and everything outside
+ * that list is denied.
+ *
+ * It records. It never blocks, never rewrites a result and never
+ * changes a return value, so an application under learning
+ * behaves exactly as it does without it.
+ *
+ * Loaded FIRST in LD_PRELOAD, ahead of the spoofing libraries,
+ * and every hook hands straight on to the next definition of the
+ * same symbol - which is the spoofing hook where one exists.
+ *
+ * Record format, one per line:
+ *   R <path>     a file that was opened for reading
+ *   D <path>     a directory that was listed
+ *   W <path>     opened for writing
+ *   X <path>     executed
+ *   L <path>     loaded as a shared object
+ *   N <family>:<port>   a socket that was created or connected
+ *
+ * Build: cc -O2 -fPIC -shared -o obsidian_learn.so obsidian_learn.c -ldl
+ * ============================================================ */
+
+#define _GNU_SOURCE
+#include <dlfcn.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <limits.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <netinet/in.h>
+#include <sys/un.h>
+#include <dirent.h>
+
+static int   log_fd = -1;
+static pid_t log_pid;
+static int   log_off;
+
+static void log_open(void)
+{
+    const char *path;
+    int (*real_open)(const char *, int, ...);
+
+    if (log_off) return;
+    if (log_fd >= 0 && log_pid == getpid()) return;
+
+    /* A new process after fork: the inherited descriptor may point at
+     * a different offset, so reopen rather than share. */
+    if (log_fd >= 0) { close(log_fd); log_fd = -1; }
+
+    path = getenv("OBSIDIAN_LEARN_LOG");
+    if (!path || !*path) { log_off = 1; return; }
+
+    real_open = dlsym(RTLD_NEXT, "open");
+    if (!real_open) { log_off = 1; return; }
+
+    log_fd = real_open(path, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0600);
+    if (log_fd < 0) { log_off = 1; return; }
+    log_pid = getpid();
+}
+
+/* O_APPEND makes a single short write atomic against other writers,
+ * so concurrent children of the same application interleave lines
+ * without corrupting them. */
+static void note(char kind, const char *what)
+{
+    char line[PATH_MAX + 8];
+    size_t n;
+    ssize_t (*real_write)(int, const void *, size_t);
+
+    if (!what || !*what) return;
+    log_open();
+    if (log_fd < 0) return;
+
+    n = strlen(what);
+    if (n > PATH_MAX - 1) n = PATH_MAX - 1;
+    line[0] = kind;
+    line[1] = ' ';
+    memcpy(line + 2, what, n);
+    line[2 + n] = '\n';
+
+    real_write = dlsym(RTLD_NEXT, "write");
+    if (real_write) real_write(log_fd, line, n + 3);
+}
+
+static void note_path(char kind, const char *path)
+{
+    char abs[PATH_MAX];
+
+    if (!path || !*path) return;
+    if (path[0] == '/') { note(kind, path); return; }
+
+    /* Relative paths are recorded resolved, because the allow-list is
+     * absolute and a relative record would be unusable. */
+    if (getcwd(abs, sizeof(abs))) {
+        size_t l = strlen(abs);
+        if (l + 1 + strlen(path) + 1 < sizeof(abs)) {
+            abs[l] = '/';
+            strcpy(abs + l + 1, path);
+            note(kind, abs);
+            return;
+        }
+    }
+    note(kind, path);
+}
+
+static char kind_for(int flags)
+{
+    int acc = flags & O_ACCMODE;
+    if (acc == O_WRONLY || acc == O_RDWR) return 'W';
+    if (flags & (O_CREAT | O_TRUNC))      return 'W';
+    return 'R';
+}
+
+/* ---------------- file opening ---------------- */
+
+int open(const char *path, int flags, ...)
+{
+    static int (*real)(const char *, int, ...);
+    mode_t mode = 0;
+    va_list ap;
+
+    if (!real) real = dlsym(RTLD_NEXT, "open");
+    if (flags & O_CREAT) {
+        va_start(ap, flags);
+        mode = (mode_t)va_arg(ap, int);
+        va_end(ap);
+    }
+    note_path(kind_for(flags), path);
+    return real(path, flags, mode);
+}
+
+int open64(const char *path, int flags, ...)
+{
+    static int (*real)(const char *, int, ...);
+    mode_t mode = 0;
+    va_list ap;
+
+    if (!real) real = dlsym(RTLD_NEXT, "open64");
+    if (!real) return open(path, flags);
+    if (flags & O_CREAT) {
+        va_start(ap, flags);
+        mode = (mode_t)va_arg(ap, int);
+        va_end(ap);
+    }
+    note_path(kind_for(flags), path);
+    return real(path, flags, mode);
+}
+
+int openat(int dirfd, const char *path, int flags, ...)
+{
+    static int (*real)(int, const char *, int, ...);
+    mode_t mode = 0;
+    va_list ap;
+
+    if (!real) real = dlsym(RTLD_NEXT, "openat");
+    if (flags & O_CREAT) {
+        va_start(ap, flags);
+        mode = (mode_t)va_arg(ap, int);
+        va_end(ap);
+    }
+    if (path[0] == 0x2f) note(kind_for(flags), path);
+    return real(dirfd, path, flags, mode);
+}
+
+FILE *fopen(const char *path, const char *mode)
+{
+    static FILE *(*real)(const char *, const char *);
+    if (!real) real = dlsym(RTLD_NEXT, "fopen");
+    note_path(mode && (*mode == 'w' || *mode == 'a' || strchr(mode, '+'))
+              ? 'W' : 'R', path);
+    return real(path, mode);
+}
+
+DIR *opendir(const char *path);
+DIR *opendir(const char *path)
+{
+    static DIR *(*real)(const char *);
+    if (!real) real = dlsym(RTLD_NEXT, "opendir");
+    note_path('D', path);
+    return real(path);
+}
+
+/* ---------------- execution ---------------- */
+
+int execve(const char *path, char *const argv[], char *const envp[])
+{
+    static int (*real)(const char *, char *const[], char *const[]);
+    if (!real) real = dlsym(RTLD_NEXT, "execve");
+    note_path('X', path);
+    return real(path, argv, envp);
+}
+
+int execv(const char *path, char *const argv[])
+{
+    static int (*real)(const char *, char *const[]);
+    if (!real) real = dlsym(RTLD_NEXT, "execv");
+    note_path('X', path);
+    return real(path, argv);
+}
+
+int execvp(const char *file, char *const argv[])
+{
+    static int (*real)(const char *, char *const[]);
+    if (!real) real = dlsym(RTLD_NEXT, "execvp");
+    note('X', file);
+    return real(file, argv);
+}
+
+void *dlopen(const char *file, int flags)
+{
+    static void *(*real)(const char *, int);
+    if (!real) real = dlsym(RTLD_NEXT, "dlopen");
+    if (file) note_path('L', file);
+    return real(file, flags);
+}
+
+/* ---------------- network ---------------- */
+
+int socket(int domain, int type, int protocol)
+{
+    static int (*real)(int, int, int);
+    char buf[64];
+    if (!real) real = dlsym(RTLD_NEXT, "socket");
+    snprintf(buf, sizeof(buf), "family:%d", domain);
+    note('N', buf);
+    return real(domain, type, protocol);
+}
+
+int connect(int fd, const struct sockaddr *addr, socklen_t len)
+{
+    static int (*real)(int, const struct sockaddr *, socklen_t);
+    char buf[128];
+
+    if (!real) real = dlsym(RTLD_NEXT, "connect");
+
+    if (addr) {
+        if (addr->sa_family == AF_INET) {
+            const struct sockaddr_in *in = (const struct sockaddr_in *)addr;
+            snprintf(buf, sizeof(buf), "tcp:%u", (unsigned)ntohs(in->sin_port));
+            note('N', buf);
+        } else if (addr->sa_family == AF_INET6) {
+            const struct sockaddr_in6 *in6 = (const struct sockaddr_in6 *)addr;
+            snprintf(buf, sizeof(buf), "tcp:%u", (unsigned)ntohs(in6->sin6_port));
+            note('N', buf);
+        } else if (addr->sa_family == AF_UNIX) {
+            const char *p = ((const struct sockaddr_un *)addr)->sun_path;
+            if (p && p[0] == '/') note('S', p);
+        }
+    }
+    return real(fd, addr, len);
+}
+OBSIDIAN_PAYLOAD_LEARN_C
+ok "src/obsidian_learn.c"
+
 cat > "$SCRIPTDIR/generate-manifest.sh" <<'OBSIDIAN_PAYLOAD_MANIFEST_SH'
 #!/bin/sh
 # /opt/obsidian/scripts/generate-manifest.sh
@@ -1748,6 +4254,44 @@ if [ "$1" = "--test" ] || [ "$1" = "--audit" ]; then
     exec /bin/sh "$OBSIDIAN_DIR/bin/obsidian-audit" "$@"
 fi
 
+# Strict-boundary entry points. Each is dispatched with /bin/sh for the
+# same reason --test is: re-entering the launcher here would add a
+# second namespace hop and unshare refuses the nested one.
+if [ "$1" = "--harden-test" ]; then
+    shift
+    if [ ! -r "$OBSIDIAN_DIR/bin/obsidian-harden-test" ]; then
+        echo "ERROR: strict-boundary components are not installed."
+        echo "       Re-run the Obsidian installer to build them."
+        exit 1
+    fi
+    exec /bin/sh "$OBSIDIAN_DIR/bin/obsidian-harden-test" "$@"
+fi
+
+if [ "$1" = "--profile" ]; then
+    shift
+    if [ ! -r "$OBSIDIAN_DIR/bin/obsidian-profile" ]; then
+        echo "ERROR: strict-boundary components are not installed."
+        exit 1
+    fi
+    exec /bin/sh "$OBSIDIAN_DIR/bin/obsidian-profile" "$@"
+fi
+
+if [ "$1" = "--harden-plan" ]; then
+    shift
+    if [ -z "$1" ]; then
+        echo "Usage: obsidian --harden-plan <application>"
+        echo "Prints the boundary that would be applied. Enforces nothing."
+        exit 1
+    fi
+    if [ ! -x "$OBSIDIAN_DIR/bin/obsidian-harden" ]; then
+        echo "ERROR: $OBSIDIAN_DIR/bin/obsidian-harden is not installed."
+        exit 1
+    fi
+    OBSIDIAN_HARDEN=plan
+    export OBSIDIAN_HARDEN
+    exec "$OBSIDIAN_DIR/bin/obsidian-harden" --print-plan -- "$@"
+fi
+
 if [ "$1" = "--coverage" ] || [ "$1" = "--doc" ]; then
     if [ -r "$OBSIDIAN_DIR/COVERAGE.md" ]; then
         if command -v less >/dev/null 2>&1 && [ -t 1 ]; then
@@ -1774,6 +4318,13 @@ if [ -z "$1" ] || [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo "  obsidian --regenerate-manifest  rescan this hardware (root)"
     echo "  obsidian --version"
     echo
+    echo "Strict boundary - default-deny confinement, off unless asked for:"
+    echo "  obsidian --harden-test          measure what the boundary closes"
+    echo "  obsidian --harden-plan <app>    show the boundary, enforce nothing"
+    echo "  obsidian --profile learn <app>  record what an application needs"
+    echo "  obsidian --profile build <app>  turn that into an allow-list"
+    echo "  OBSIDIAN_HARDEN=1 obsidian <app>   run it inside the boundary"
+    echo
     echo "Runtime switches (all default to not breaking applications):"
     echo "  OBSIDIAN_GPU_MODE=strict        mask /dev/dri and /sys/class/drm"
     echo "                                  entirely; software rendering only"
@@ -1781,6 +4332,19 @@ if [ -z "$1" ] || [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo "                                  through (only if an app needs it)"
     echo "  OBSIDIAN_ALLOW_SYSTEM_BUS=1     permit the D-Bus system bus"
     echo "  OBSIDIAN_VERBOSE=1              log blocked IPC connections"
+    echo
+    echo "Strict-boundary switches (only read when OBSIDIAN_HARDEN is set):"
+    echo "  OBSIDIAN_HARDEN=1               default-deny every layer"
+    echo "  OBSIDIAN_HARDEN=paranoid        also deny memfd and scope IPC"
+    echo "  OBSIDIAN_HARDEN=plan            print the boundary, enforce none"
+    echo "  OBSIDIAN_ALLOW_PATHS_RO=a:b     grant read on these paths"
+    echo "  OBSIDIAN_ALLOW_PATHS_RW=a:b     grant read and write"
+    echo "  OBSIDIAN_ALLOW_EXEC=a:b         grant execute"
+    echo "  OBSIDIAN_ALLOW_DEV=/dev/x       grant a device node"
+    echo "  OBSIDIAN_ALLOW_NET=tcp:443      grant outbound TCP on a port"
+    echo "  OBSIDIAN_ALLOW_NESTED_NS=1      let the app build namespaces"
+    echo "  OBSIDIAN_HARDEN_PROFILE=<file>  use this allow-list"
+    echo "  OBSIDIAN_HARDEN_FAIL_CLOSED=1   refuse to run if a layer fails"
     echo
     echo "Example: obsidian firefox"
     [ -z "$1" ] && exit 1
@@ -1800,6 +4364,16 @@ case "$GPU_MODE" in
 esac
 
 PRELOAD=""
+
+# Allow-list discovery. The recorder is loaded ahead of the spoofing
+# libraries and hands every call straight on to them, so what it
+# records is what the application asked for and what the application
+# receives is unchanged.
+if [ -n "${OBSIDIAN_LEARN:-}" ] && [ "${OBSIDIAN_LEARN}" != "0" ] &&
+   [ -f "$LIB_DIR/obsidian_learn.so" ]; then
+    PRELOAD="$LIB_DIR/obsidian_learn.so"
+fi
+
 for lib in obsidian_core.so obsidian_wayland.so obsidian_gpu.so; do
     if [ -f "$LIB_DIR/$lib" ]; then
         if [ -z "$PRELOAD" ]; then
@@ -1973,6 +4547,88 @@ if [ -f "$MANIFEST_PATH" ]; then
     [ -n "$v" ] && GPU_VENDOR="$v"
     [ -n "$r" ] && GPU_MESA_STR="$r"
 fi
+
+# ============================================================
+# Strict boundary preparation (opt-in, host side).
+#
+# Nothing in this block runs unless OBSIDIAN_HARDEN is set to
+# something other than 0 or off. With it unset, the launcher below
+# is byte-for-byte the launcher that produced the 93% metadata
+# result, and no application sees any difference.
+#
+# Two things have to happen out here rather than inside the
+# namespaces. The per-app profile lives in the real home directory,
+# which is replaced by a tmpfs further down, so it has to be located
+# now. And the inherited environment has to be cleaned before it is
+# handed to anything, because a descriptor or a credential passed in
+# by whatever started this launcher was never covered by any policy
+# applied later - it was already there.
+# ============================================================
+case "${OBSIDIAN_HARDEN:-}" in
+    ""|0|off|no|false) ;;
+    *)
+        if [ ! -x "$OBSIDIAN_DIR/bin/obsidian-harden" ]; then
+            echo "ERROR: OBSIDIAN_HARDEN is set but the enforcer is missing:" >&2
+            echo "       $OBSIDIAN_DIR/bin/obsidian-harden" >&2
+            echo "       Re-run the installer, or unset OBSIDIAN_HARDEN to" >&2
+            echo "       run this application the way it ran before." >&2
+            exit 1
+        fi
+        export OBSIDIAN_HARDEN
+
+        if [ -z "${OBSIDIAN_HARDEN_PROFILE:-}" ]; then
+            _appkey=$(printf '%s' "$1" | sed 's|.*/||; s/[^A-Za-z0-9._-]/_/g')
+            for _pd in "${XDG_CONFIG_HOME:-$HOME/.config}/obsidian/profiles" \
+                       /etc/obsidian/profiles; do
+                if [ -f "$_pd/$_appkey.profile" ]; then
+                    OBSIDIAN_HARDEN_PROFILE="$_pd/$_appkey.profile"
+                    export OBSIDIAN_HARDEN_PROFILE
+                    break
+                fi
+            done
+            unset _appkey _pd
+        else
+            export OBSIDIAN_HARDEN_PROFILE
+        fi
+
+        # Launch-state scrub, part one: named credentials.
+        for _v in SSH_AUTH_SOCK SSH_AGENT_PID SSH_CONNECTION SSH_CLIENT \
+                  SSH_TTY GPG_AGENT_INFO GNUPGHOME GPG_TTY KRB5CCNAME \
+                  AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN \
+                  GOOGLE_APPLICATION_CREDENTIALS AZURE_CLIENT_SECRET \
+                  GITHUB_TOKEN GH_TOKEN GITLAB_TOKEN NPM_TOKEN PYPI_TOKEN \
+                  DOCKER_HOST KUBECONFIG VAULT_TOKEN \
+                  HISTFILE MAIL MAILPATH \
+                  SUDO_USER SUDO_UID SUDO_GID SUDO_COMMAND; do
+            unset "$_v" 2>/dev/null || true
+        done
+        unset _v
+
+        # Launch-state scrub, part two: anything that calls itself a
+        # secret. Pattern matching rather than a fixed list, because
+        # the interesting variable is always the one nobody listed.
+        _leaky=$(env 2>/dev/null |
+                 sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' |
+                 grep -E 'TOKEN|SECRET|PASSWORD|PASSWD|APIKEY|API_KEY|CREDENTIAL|PRIVATE_KEY|_PW$' \
+                 2>/dev/null || true)
+        for _v in $_leaky; do
+            case "$_v" in
+                OBSIDIAN_*) continue ;;
+            esac
+            unset "$_v" 2>/dev/null || true
+        done
+        unset _leaky _v
+
+        if [ -n "${OBSIDIAN_VERBOSE:-}" ]; then
+            echo "obsidian: strict boundary armed (${OBSIDIAN_HARDEN})" >&2
+            if [ -n "${OBSIDIAN_HARDEN_PROFILE:-}" ]; then
+                echo "obsidian: profile $OBSIDIAN_HARDEN_PROFILE" >&2
+            else
+                echo "obsidian: no per-app profile; base allow-list only" >&2
+            fi
+        fi
+        ;;
+esac
 
 # ============================================================
 # Isolation stage.
@@ -2319,6 +4975,26 @@ if [ "$#" -eq 0 ]; then
     exit 1
 fi
 
+# Strict boundary stage. When OBSIDIAN_HARDEN is unset this adds
+# nothing to the command line at all, so the argv the application
+# receives is identical to what it received before this stage
+# existed. When it is set, the enforcer is the last thing to run
+# before the application and the boundary it installs survives the
+# exec into it.
+OBSIDIAN_HARDEN_BIN="/opt/obsidian/bin/obsidian-harden"
+case "${OBSIDIAN_HARDEN:-}" in
+    ""|0|off|no|false) ;;
+    *)
+        if [ -x "$OBSIDIAN_HARDEN_BIN" ]; then
+            set -- "$OBSIDIAN_HARDEN_BIN" -- "$@"
+        else
+            echo "obsidian-inner: OBSIDIAN_HARDEN is set but $OBSIDIAN_HARDEN_BIN" >&2
+            echo "obsidian-inner: is not installed; refusing to run unconfined" >&2
+            exit 1
+        fi
+        ;;
+esac
+
 # "$@" is expanded HERE, at run time, by this shell -- each
 # argument stays a separate argv element.
 if command -v taskset >/dev/null 2>&1; then
@@ -2336,6 +5012,597 @@ exec "$@"
 OBSIDIAN_PAYLOAD_INNER
 chmod 755 "$BINDIR/obsidian-inner"
 ok "bin/obsidian-inner"
+
+cat > "$BINDIR/obsidian-harden-test" <<'OBSIDIAN_PAYLOAD_HARDENTEST_SH'
+#!/bin/sh
+# ============================================================
+# /opt/obsidian/bin/obsidian-harden-test
+# Obsidian Mirror - strict boundary, measured.
+#
+# Runs the same probe twice through the same launcher: once as
+# the launcher runs today, once with OBSIDIAN_HARDEN=1. Prints
+# what each attempt actually got back from the kernel.
+#
+# It does not report what the policy intends. It reports what
+# the kernel did. Where those two disagree, the kernel is right
+# and the documentation is wrong.
+# ============================================================
+
+OBSIDIAN_DIR="${OBSIDIAN_DIR:-/opt/obsidian}"
+LAUNCH="$OBSIDIAN_DIR/bin/obsidian-launch"
+PROBE="$OBSIDIAN_DIR/bin/obsidian-hardenprobe"
+HARDEN="$OBSIDIAN_DIR/bin/obsidian-harden"
+
+C_B=""; C_0=""; C_G=""; C_R=""; C_Y=""
+if [ -t 1 ] && [ -z "$NO_COLOR" ]; then
+    C_B=$(printf '\033[1m'); C_0=$(printf '\033[0m')
+    C_G=$(printf '\033[32m'); C_R=$(printf '\033[31m')
+    C_Y=$(printf '\033[33m')
+fi
+
+if [ ! -x "$PROBE" ]; then
+    echo "ERROR: $PROBE is not installed."
+    echo "       Re-run the Obsidian installer to build the probe."
+    exit 1
+fi
+if [ ! -x "$HARDEN" ]; then
+    echo "ERROR: $HARDEN is not installed."
+    echo "       Re-run the Obsidian installer to build the enforcer."
+    exit 1
+fi
+
+WORK="${TMPDIR:-/tmp}/obsidian-harden-test.$$"
+mkdir -p "$WORK" || { echo "ERROR: cannot create $WORK"; exit 1; }
+trap 'rm -rf "$WORK"' EXIT INT TERM
+
+printf '\n%s' "$C_B"
+printf -- '=====================================================================\n'
+printf ' OBSIDIAN MIRROR - STRICT BOUNDARY, MEASURED\n'
+printf -- '=====================================================================%s\n' "$C_0"
+printf '\n'
+printf ' Host      : %s\n' "$(uname -srm 2>/dev/null)"
+printf ' Landlock  : '
+LLABI=$("$HARDEN" --print-plan -- /bin/true 2>&1 | sed -n 's/.*landlock ABI  : //p' | head -1)
+if [ -n "$LLABI" ] && [ "$LLABI" != "0" ] && [ "$LLABI" != "-1" ]; then
+    printf 'ABI %s\n' "$LLABI"
+else
+    printf '%sNOT AVAILABLE - filesystem confinement cannot load%s\n' "$C_R" "$C_0"
+fi
+printf ' Date      : %s\n' "$(date -u '+%Y-%m-%d %H:%M UTC' 2>/dev/null)"
+printf '\n'
+
+# ---- run 1: the launcher exactly as it behaves today -----------------
+printf ' running baseline (launcher as shipped) ... '
+OBSIDIAN_HARDEN= "$LAUNCH" "$PROBE" --quiet \
+    >"$WORK/base.tsv" 2>"$WORK/base.err"
+BASE_RC=$?
+printf '%s records\n' "$(wc -l < "$WORK/base.tsv" 2>/dev/null | tr -d ' ')"
+
+# ---- run 2: the same launcher with the boundary on -------------------
+printf ' running hardened (OBSIDIAN_HARDEN=1)   ... '
+OBSIDIAN_HARDEN=1 \
+    "$LAUNCH" "$PROBE" --quiet >"$WORK/hard.tsv" 2>"$WORK/hard.err"
+HARD_RC=$?
+printf '%s records\n' "$(wc -l < "$WORK/hard.tsv" 2>/dev/null | tr -d ' ')"
+
+if [ ! -s "$WORK/base.tsv" ]; then
+    printf '\n%sERROR%s: the baseline run produced nothing (exit %s).\n' \
+           "$C_R" "$C_0" "$BASE_RC"
+    sed 's/^/        /' "$WORK/base.err" | head -20
+    exit 1
+fi
+if [ ! -s "$WORK/hard.tsv" ]; then
+    printf '\n%sERROR%s: the hardened run produced nothing (exit %s).\n' \
+           "$C_R" "$C_0" "$HARD_RC"
+    sed 's/^/        /' "$WORK/hard.err" | head -20
+    printf '\n Nothing is enforced by default, so the launcher is unaffected.\n'
+    exit 1
+fi
+
+awk -F'\t' -v cg="$C_G" -v cr="$C_R" -v cy="$C_Y" -v c0="$C_0" -v cb="$C_B" '
+BEGIN {
+    # Surfaces an application legitimately needs. If the boundary
+    # closes one of these it has broken the application, and that is
+    # a failure of this project, not a success.
+    control["jit.anon_exec"]     = 1
+    control["fs.write.home"]     = 1
+    control["fs.write.tmp"]      = 1
+    control["fs.read.own_libs"]  = 1
+    control["fs.read.urandom"]   = 1
+    control["net.socket_unix"]   = 1
+
+    label["fs.read.shadow"]      = "read the password hashes"
+    label["fs.read.sshkeys"]     = "read the host SSH keys"
+    label["fs.read.roothome"]    = "read the root account home"
+    label["fs.read.varlog"]      = "read every system log"
+    label["fs.read.boot"]        = "read the kernel and initramfs"
+    label["fs.read.kcore"]       = "read kernel memory through /proc/kcore"
+    label["fs.read.kallsyms"]    = "read the kernel symbol table"
+    label["fs.read.devmem"]      = "read physical memory via /dev/mem"
+    label["fs.read.devkmsg"]     = "read the kernel log device"
+    label["fs.read.iomem"]       = "map the physical memory layout"
+    label["fs.read.modules"]     = "enumerate loaded kernel modules"
+    label["fs.read.debugfs"]     = "read debugfs"
+    label["fs.read.rawdisk"]     = "read the raw disk device"
+    label["fs.write.sysrq"]      = "trigger a kernel sysrq"
+    label["fs.write.etc"]        = "write into /etc"
+    label["fs.write.usr"]        = "write into /usr"
+    label["fs.read.own_libs"]    = "read its own shared libraries"
+    label["fs.read.urandom"]     = "read /dev/urandom"
+    label["fs.write.home"]       = "write in its own home"
+    label["fs.write.tmp"]        = "write in /tmp"
+    label["exec.shell"]          = "spawn a shell"
+    label["exec.python"]         = "spawn a python interpreter"
+    label["exec.node"]           = "spawn a node interpreter"
+    label["exec.perl"]           = "spawn a perl interpreter"
+    label["exec.memfd"]          = "execute code that has no file"
+    label["jit.anon_exec"]       = "JIT-compile in anonymous memory"
+    label["mem.ptrace"]          = "attach a debugger to another process"
+    label["mem.process_vm_readv"]  = "read another process memory"
+    label["mem.process_vm_writev"] = "write another process memory"
+    label["mem.peer_mem"]        = "open /proc/PID/mem of a peer"
+    label["mem.userfaultfd"]     = "take over page faults"
+    label["mem.perf_event_open"] = "open a performance counter"
+    label["mem.pidfd_getfd"]     = "steal a descriptor from a peer"
+    label["mem.kcmp"]            = "correlate processes with kcmp"
+    label["log.kernel_ring"]     = "read the kernel ring buffer"
+    label["kern.init_module"]    = "load a kernel module"
+    label["kern.bpf"]            = "load a BPF program"
+    label["kern.io_uring"]       = "open an io_uring ring"
+    label["hw.iopl"]             = "take direct hardware port I/O"
+    label["key.keyctl"]          = "reach the kernel keyring"
+    label["time.clock_settime"]  = "set the system clock"
+    label["ns.unshare_user"]     = "create a user namespace"
+    label["ns.mount"]            = "mount a filesystem"
+    label["ns.setns"]            = "enter another namespace"
+    label["ns.open_by_handle"]   = "open a file by handle"
+    label["net.socket_inet"]     = "open an IPv4 socket"
+    label["net.socket_inet6"]    = "open an IPv6 socket"
+    label["net.socket_netlink"]  = "query the kernel over netlink"
+    label["net.socket_packet"]   = "open a raw packet socket"
+    label["net.socket_unix"]     = "open a unix socket (display server)"
+    label["net.connect_tcp"]     = "reach a routable address"
+    label["priv.no_new_privs"]   = "regain privilege through setuid"
+    label["priv.seccomp_mode"]   = "run without a syscall filter"
+    label["cap.sys_admin_bounding"] = "hold CAP_SYS_ADMIN in the bounding set"
+    label["cap.chown_bounding"]  = "hold CAP_CHOWN in the bounding set"
+    label["cap.effective_set"]   = "hold any effective capability"
+}
+NR == FNR { base[$1] = $2; based[$1] = $3; order[++n] = $1; next }
+{ hard[$1] = $2; hardd[$1] = $3 }
+END {
+    printf "\n%s SECTION 1  What the boundary closed%s\n", cb, c0
+    printf " %s\n", "-------------------------------------------------------------------"
+    printf " %-34s %-12s %-12s %s\n", "ATTEMPT", "AS SHIPPED", "HARDENED", ""
+    printf " %s\n", "-------------------------------------------------------------------"
+
+    closed = 0; stillopen = 0; already = 0; broke = 0; incon = 0
+    unreach = 0
+
+    # A capability left in the bounding set is only worth anything to a
+    # process that can put it into its effective set. With no effective
+    # capability and no_new_privs set there is no path back to one, so
+    # calling that "open" would be counting a door in a wall.
+    caps_dead = (hard["cap.effective_set"] == "DENIED" &&
+                 hard["priv.no_new_privs"] == "DENIED")
+
+    for (i = 1; i <= n; i++) {
+        k = order[i]
+        b = base[k]; h = hard[k]
+        if (h == "") h = "MISSING"
+        desc = (k in label) ? label[k] : k
+
+        if (k in control) continue
+
+        if (caps_dead && (k == "cap.sys_admin_bounding" ||
+                          k == "cap.chown_bounding")) {
+            v = cy "unreachable *" c0; unreach++
+        } else if (b == "ALLOWED" && (h == "DENIED" || h == "KILLED")) {
+            v = cg "CLOSED" c0; closed++
+        } else if (b == "ALLOWED" && h == "ALLOWED") {
+            v = cr "STILL OPEN" c0; stillopen++
+        } else if ((b == "DENIED" || b == "KILLED") &&
+                   (h == "DENIED" || h == "KILLED")) {
+            v = "already shut"; already++
+        } else if (b == "ABSENT" && (h == "DENIED" || h == "KILLED")) {
+            v = "shut, absent here"; already++
+        } else {
+            v = cy "inconclusive" c0; incon++
+        }
+        printf " %-34s %-12s %-12s %s\n", desc, b, h, v
+    }
+
+    if (unreach > 0) {
+        printf "\n  * The bounding set could not be emptied: clearing it needs\n"
+        printf "    CAP_SETPCAP and this process holds no capability at all\n"
+        printf "    (CapEff 0) once the launcher has mapped it to an ordinary\n"
+        printf "    user. Nothing in the set is reachable from here, but it is\n"
+        printf "    reported rather than hidden.\n"
+    }
+
+    printf "\n%s SECTION 2  What the application kept (positive controls)%s\n", cb, c0
+    printf " %s\n", "-------------------------------------------------------------------"
+    printf " %-34s %-12s %-12s %s\n", "CAPABILITY THE APP NEEDS", "AS SHIPPED", "HARDENED", ""
+    printf " %s\n", "-------------------------------------------------------------------"
+    for (i = 1; i <= n; i++) {
+        k = order[i]
+        if (!(k in control)) continue
+        b = base[k]; h = hard[k]
+        desc = (k in label) ? label[k] : k
+        if (h == "ALLOWED") { v = cg "kept" c0 }
+        else if (b != "ALLOWED") { v = cy "n/a here" c0 }
+        else { v = cr "BROKEN BY THE BOUNDARY" c0; broke++ }
+        printf " %-34s %-12s %-12s %s\n", desc, b, h, v
+    }
+
+    printf "\n%s SECTION 3  Summary%s\n", cb, c0
+    printf " %s\n", "-------------------------------------------------------------------"
+    printf "  %-45s %d\n", "surfaces the boundary closed", closed
+    printf "  %-45s %d\n", "surfaces already shut by the base launcher", already
+    printf "  %-45s %s%d%s\n", "surfaces still open under the boundary", \
+           (stillopen ? cr : cg), stillopen, c0
+    printf "  %-45s %s%d%s\n", "application capabilities broken", \
+           (broke ? cr : cg), broke, c0
+    printf "  %-45s %d\n", "present but unreachable", unreach
+    printf "  %-45s %d\n", "inconclusive on this machine", incon
+    printf "\n"
+    if (broke > 0)
+        printf "  %sThe boundary broke something the application needs.%s\n  Loosen the profile before using it on a real application.\n\n", cr, c0
+}
+' "$WORK/base.tsv" "$WORK/hard.tsv"
+
+cat <<'LIMITS'
+ SECTION 4  What this does not close
+ -------------------------------------------------------------------
+  Side channels.        Cache timing, branch prediction, power draw,
+                        acoustics and electromagnetic emission are not
+                        syscalls. No kernel policy sees them, so none
+                        of them appear above and none of them are
+                        closed. This is a real, permanent gap.
+
+  Silicon below the OS. A management engine, a platform security
+                        processor or signed firmware runs underneath
+                        the kernel that enforces all of the above. A
+                        policy written in kernel objects cannot reach
+                        what the kernel itself runs on top of.
+
+  The host itself.      Everything here confines the application. It
+                        does not confine the machine's owner, or code
+                        already running as another user. That was
+                        never the boundary being drawn.
+
+  Anything not probed.  This report covers the attempts listed above
+                        and nothing else. A surface that is not
+                        measured here is not a surface that is proven
+                        closed - it is one nobody has looked at yet.
+
+LIMITS
+
+printf ' Reproduce any single line with:\n'
+printf '   %s %s --quiet | grep <key>\n' "$LAUNCH" "$PROBE"
+printf '   OBSIDIAN_HARDEN=1 %s %s --quiet | grep <key>\n\n' "$LAUNCH" "$PROBE"
+
+exit 0
+OBSIDIAN_PAYLOAD_HARDENTEST_SH
+chmod 755 "$BINDIR/obsidian-harden-test"
+ok "bin/obsidian-harden-test"
+
+cat > "$BINDIR/obsidian-profile" <<'OBSIDIAN_PAYLOAD_PROFILE_SH'
+#!/bin/sh
+# ============================================================
+# /opt/obsidian/bin/obsidian-profile
+# Obsidian Mirror - per-application allow-list discovery.
+#
+# The point of the enumeration is not to list denials. It is to
+# discover what an application legitimately needs, grant exactly
+# that, and deny the rest. This tool is that loop:
+#
+#   obsidian-profile learn <app> [args...]   run it, record it
+#   obsidian-profile build <app>             collapse into a profile
+#   obsidian-profile show  <app>             read the profile
+#   obsidian-profile list                    every profile on this host
+#   obsidian-profile reset <app>             throw the recording away
+#
+# Then, and only then:
+#
+#   OBSIDIAN_HARDEN=1 obsidian <app>
+#
+# A profile that was never built means the boundary falls back to
+# its base allow-list, which is deliberately conservative.
+# ============================================================
+
+OBSIDIAN_DIR="${OBSIDIAN_DIR:-/opt/obsidian}"
+LAUNCH="$OBSIDIAN_DIR/bin/obsidian-launch"
+LEARN_DIR="${OBSIDIAN_LEARN_DIR:-$OBSIDIAN_DIR/var/learn}"
+USER_PROFILES="${XDG_CONFIG_HOME:-$HOME/.config}/obsidian/profiles"
+SYS_PROFILES="/etc/obsidian/profiles"
+
+usage() {
+    sed -n '3,24p' "$0" | sed 's/^# \{0,1\}//'
+    exit "${1:-0}"
+}
+
+app_key() {
+    printf '%s' "$1" | sed 's|.*/||; s/[^A-Za-z0-9._-]/_/g'
+}
+
+profile_path() {
+    _k=$(app_key "$1")
+    if [ -f "$USER_PROFILES/$_k.profile" ]; then
+        printf '%s\n' "$USER_PROFILES/$_k.profile"
+    elif [ -f "$SYS_PROFILES/$_k.profile" ]; then
+        printf '%s\n' "$SYS_PROFILES/$_k.profile"
+    else
+        printf '%s\n' "$USER_PROFILES/$_k.profile"
+    fi
+}
+
+CMD="$1"
+[ -n "$CMD" ] || usage 1
+shift
+
+case "$CMD" in
+
+learn)
+    APP="$1"
+    [ -n "$APP" ] || { echo "usage: obsidian-profile learn <app> [args...]" >&2; exit 1; }
+    shift
+    KEY=$(app_key "$APP")
+    mkdir -p "$LEARN_DIR" 2>/dev/null
+    if [ ! -w "$LEARN_DIR" ]; then
+        LEARN_DIR="${TMPDIR:-/tmp}/obsidian-learn"
+        mkdir -p "$LEARN_DIR" || exit 1
+        echo "note: $OBSIDIAN_DIR/var/learn is not writable, recording to $LEARN_DIR"
+    fi
+    LOG="$LEARN_DIR/$KEY.log"
+    : > "$LOG" || exit 1
+    echo "Recording what $APP reaches for."
+    echo "  log: $LOG"
+    echo
+    echo "Use the application normally - open a file, open its settings,"
+    echo "print something, do whatever it is you actually do with it. An"
+    echo "access that never happens during the recording will be denied"
+    echo "later, so exercise the parts you care about. Then quit it."
+    echo
+    OBSIDIAN_LEARN=1 OBSIDIAN_LEARN_LOG="$LOG" "$LAUNCH" "$APP" "$@"
+    RC=$?
+    echo
+    if [ -s "$LOG" ]; then
+        echo "Recorded $(wc -l < "$LOG" | tr -d ' ') accesses."
+        echo "Next:  obsidian-profile build $APP"
+    else
+        echo "Nothing was recorded. The learning library did not load."
+        echo "Check that $OBSIDIAN_DIR/lib/obsidian_learn.so exists."
+    fi
+    exit $RC
+    ;;
+
+build)
+    APP="$1"
+    [ -n "$APP" ] || { echo "usage: obsidian-profile build <app>" >&2; exit 1; }
+    KEY=$(app_key "$APP")
+    LOG="$LEARN_DIR/$KEY.log"
+    [ -f "$LOG" ] || LOG="${TMPDIR:-/tmp}/obsidian-learn/$KEY.log"
+    if [ ! -s "$LOG" ]; then
+        echo "No recording for $APP." >&2
+        echo "Run:  obsidian-profile learn $APP" >&2
+        exit 1
+    fi
+    mkdir -p "$USER_PROFILES" || exit 1
+    OUT="$USER_PROFILES/$KEY.profile"
+
+    BIN=$(command -v "$APP" 2>/dev/null || printf '%s' "$APP")
+
+    {
+    printf '# Obsidian Mirror strict-boundary profile\n'
+    printf '#   application : %s\n' "$APP"
+    printf '#   built from  : %s\n' "$LOG"
+    printf '#   accesses    : %s recorded\n' "$(wc -l < "$LOG" | tr -d ' ')"
+    printf '#   built on    : %s\n' "$(date -u '+%Y-%m-%d %H:%M UTC' 2>/dev/null)"
+    printf '#\n'
+    printf '# Every line below is something this application actually did.\n'
+    printf '# Everything not listed here, and not in the base allow-list,\n'
+    printf '# is denied. Delete a line to deny it too; the application will\n'
+    printf '# tell you soon enough if it needed it.\n'
+    printf '#\n'
+    printf '# The base allow-list already covers: /usr/lib and /lib as\n'
+    printf '# read-execute, /usr/share and the common /etc entries as\n'
+    printf '# read-only, the home directory, /tmp and the runtime dir as\n'
+    printf '# read-write, and the harmless /dev nodes. Those are not\n'
+    printf '# repeated here.\n'
+    printf '\n'
+
+    awk '
+    function toplevel(p,   a) { split(p, a, "/"); return a[2] }
+    function limit_for(p,   t) {
+        t = toplevel(p)
+        if (t == "usr")  return 3
+        if (t == "var")  return 3
+        if (t == "run")  return 3
+        if (t == "etc")  return 2
+        if (t == "opt")  return 2
+        if (t == "dev")  return 2
+        if (t == "srv")  return 2
+        return 2
+    }
+    function dirname(p,   i) {
+        i = length(p)
+        while (i > 1 && substr(p, i, 1) != "/") i--
+        if (i <= 1) return "/"
+        return substr(p, 1, i - 1)
+    }
+    function depth(p,   a) { return split(p, a, "/") - 1 }
+    function truncate_to(p, lim,   a, n, i, out) {
+        n = split(p, a, "/")
+        out = ""
+        for (i = 2; i <= n && i <= lim + 1; i++) out = out "/" a[i]
+        return (out == "") ? "/" : out
+    }
+    # Collapse an access to the smallest grant that still contains it.
+    # A file sitting directly in a top-level directory is granted by
+    # name: /etc/hostname must never turn into a grant on /etc.
+    function collapse(p, isdir,   d, lim) {
+        d = isdir ? p : dirname(p)
+        lim = limit_for(p)
+        if (!isdir && depth(d) < 2) return p
+        if (depth(d) > lim) return truncate_to(d, lim)
+        return d
+    }
+    # Already granted by the base allow-list: not worth a line.
+    function covered(p) {
+        # The launcher stages that run before the boundary is applied.
+        # They are already past by the time anything is enforced, so a
+        # grant for them would be a grant for nothing.
+        if (p ~ /^\/opt\/obsidian/)   return 1
+        if (p ~ /\/taskset$/)         return 1
+        if (p ~ /^\/usr\/lib/)        return 1
+        if (p ~ /^\/lib/)             return 1
+        if (p ~ /^\/usr\/libexec/)    return 1
+        if (p ~ /^\/usr\/share/)      return 1
+        if (p ~ /^\/usr\/local\/lib/) return 1
+        if (p ~ /^\/proc/)            return 1
+        if (p ~ /^\/sys/)             return 1
+        if (p ~ /^\/tmp/)             return 1
+        if (p ~ /^\/var\/tmp/)        return 1
+        if (p ~ /^\/dev\/shm/)        return 1
+        if (p ~ /^\/dev\/(null|zero|full|random|urandom|tty|ptmx|pts|console|fd|std)/) return 1
+        if (p ~ /^\/dev\/dri/)        return 1
+        if (home != "" && index(p, home) == 1) return 1
+        if (runtime != "" && index(p, runtime) == 1) return 1
+        if (p ~ /^\/etc\/(fonts|ssl|ca-certificates|resolv\.conf|hosts|hostname|nsswitch\.conf|passwd|group|localtime|timezone|machine-id|os-release|ld\.so|ld-musl|xdg|gtk-|pango|mime\.types|alternatives|pki|terminfo|dconf|vulkan|drirc|asound|pulse|pipewire)/) return 1
+        return 0
+    }
+    $1 == "R" || $1 == "W" || $1 == "X" || $1 == "L" || $1 == "S" || $1 == "D" {
+        kind = $1
+        $1 = ""
+        sub(/^ /, "")
+        p = $0
+        if (p == "" || substr(p, 1, 1) != "/") next
+
+        if (kind == "X" || kind == "L") {
+            # Executables and dynamically loaded objects are granted by
+            # exact path. This is the layer that decides whether the app
+            # can start a shell, so it does not get collapsed.
+            if (!covered(p)) exec_seen[p] = 1
+            next
+        }
+        if (kind == "S") {
+            c = collapse(p, 0)
+            if (!covered(c)) sock_seen[c] = 1
+            next
+        }
+        c = collapse(p, kind == "D")
+        if (covered(c)) next
+        if (c ~ /^\/dev\//) { dev_seen[c] = 1; next }
+        if (kind == "W") { rw_seen[c] = 1; delete ro_seen[c] }
+        else if (!(c in rw_seen)) ro_seen[c] = 1
+    }
+    $1 == "N" {
+        if ($2 ~ /^tcp:/) { split($2, a, ":"); if (a[2] + 0 > 0) net_seen[a[2]] = 1 }
+    }
+    END {
+        n = 0
+        printf "# --- read-only ---\n"
+        for (p in ro_seen) { print "allow.ro=" p; n++ }
+        if (n == 0) printf "# (nothing beyond the base allow-list)\n"
+
+        printf "\n# --- read-write ---\n"
+        n = 0
+        for (p in rw_seen) { print "allow.rw=" p; n++ }
+        for (p in sock_seen) { print "allow.rw=" p; n++ }
+        if (n == 0) printf "# (nothing beyond the base allow-list)\n"
+
+        printf "\n# --- devices ---\n"
+        n = 0
+        for (p in dev_seen) { print "allow.dev=" p; n++ }
+        if (n == 0) printf "# (nothing beyond the base allow-list)\n"
+
+        printf "\n# --- execution ---\n"
+        printf "# Each of these is a program this application started. If a\n"
+        printf "# shell or an interpreter appears here, decide whether it is\n"
+        printf "# really needed before leaving the line in place.\n"
+        n = 0
+        for (p in exec_seen) {
+            if (p ~ /\/(sh|bash|dash|zsh|python[0-9.]*|perl|node|ruby|php|lua|tclsh|awk|env)$/)
+                printf "# REVIEW - interpreter: allow.exec=%s\n", p
+            else { print "allow.exec=" p; n++ }
+        }
+        if (n == 0) printf "# (nothing beyond the base allow-list)\n"
+
+        printf "\n# --- network ---\n"
+        n = 0
+        for (p in net_seen) { print "allow.net=tcp:" p; n++ }
+        if (n == 0) {
+            printf "# This application made no outbound TCP connection during\n"
+            printf "# the recording, so it gets none. Add allow.net=tcp:443 if\n"
+            printf "# it turns out to need one.\n"
+        }
+    }
+    ' home="$HOME" runtime="$XDG_RUNTIME_DIR" "$LOG"
+
+    printf '\n# --- options ---\n'
+    printf '# opt.scope_ipc=1     confine abstract unix sockets and signals\n'
+    printf '#                     (breaks X11 clients, harmless on Wayland)\n'
+    printf '# opt.nested_ns=1     let the app build its own namespaces\n'
+    printf '#                     (Chromium and Electron zygotes want this)\n'
+    printf '# opt.memfd=deny      refuse anonymous memory files outright\n'
+    printf '# opt.hard_fail=1     refuse to start if a layer cannot load\n'
+    printf '# opt.verbose=1       log every grant as it is applied\n'
+    } > "$OUT"
+
+    echo "Profile written: $OUT"
+    echo
+    grep -c '^allow\.' "$OUT" | sed 's/^/  grants: /'
+    grep -c '^# REVIEW' "$OUT" | sed 's/^/  lines needing your decision: /'
+    echo
+    echo "Read it, delete anything the application does not deserve, then:"
+    echo "  OBSIDIAN_HARDEN=1 obsidian $APP"
+    ;;
+
+show)
+    APP="$1"
+    [ -n "$APP" ] || { echo "usage: obsidian-profile show <app>" >&2; exit 1; }
+    P=$(profile_path "$APP")
+    [ -f "$P" ] || { echo "no profile for $APP (looked in $P)" >&2; exit 1; }
+    echo "# $P"
+    cat "$P"
+    ;;
+
+path)
+    APP="$1"
+    [ -n "$APP" ] || { echo "usage: obsidian-profile path <app>" >&2; exit 1; }
+    profile_path "$APP"
+    ;;
+
+list)
+    FOUND=0
+    for d in "$USER_PROFILES" "$SYS_PROFILES"; do
+        [ -d "$d" ] || continue
+        for f in "$d"/*.profile; do
+            [ -f "$f" ] || continue
+            FOUND=1
+            printf '%-28s %s grants  %s\n' \
+                "$(basename "$f" .profile)" \
+                "$(grep -c '^allow\.' "$f")" "$f"
+        done
+    done
+    [ "$FOUND" -eq 1 ] || echo "No profiles yet. Start with: obsidian-profile learn <app>"
+    ;;
+
+reset)
+    APP="$1"
+    [ -n "$APP" ] || { echo "usage: obsidian-profile reset <app>" >&2; exit 1; }
+    KEY=$(app_key "$APP")
+    rm -f "$LEARN_DIR/$KEY.log" "${TMPDIR:-/tmp}/obsidian-learn/$KEY.log"
+    echo "Recording for $APP removed. The profile itself was left alone."
+    ;;
+
+-h|--help|help) usage 0 ;;
+*) echo "unknown command: $CMD" >&2; usage 1 ;;
+esac
+OBSIDIAN_PAYLOAD_PROFILE_SH
+chmod 755 "$BINDIR/obsidian-profile"
+ok "bin/obsidian-profile"
 
 cat > "$BINDIR/obsidian-audit" <<'OBSIDIAN_PAYLOAD_AUDIT'
 #!/bin/sh
@@ -3364,6 +6631,13 @@ distro, is a bug.
 | `/opt/obsidian/bin/obsidian-launch` | Isolation launcher |
 | `/opt/obsidian/bin/obsidian-inner` | Final execution stage (seccomp + affinity + exec) |
 | `/opt/obsidian/bin/obsidian-audit` | Four-section protection audit |
+| `/opt/obsidian/bin/obsidian-harden` | Strict boundary enforcer (opt-in) |
+| `/opt/obsidian/bin/obsidian-hardenprobe` | Strict boundary measurement probe |
+| `/opt/obsidian/bin/obsidian-harden-test` | Side-by-side boundary report |
+| `/opt/obsidian/bin/obsidian-profile` | Per-app allow-list discovery |
+| `/opt/obsidian/lib/obsidian_learn.so` | Access recorder used by `--profile learn` |
+| `/opt/obsidian/var/learn/` | Recordings, one per application |
+| `/etc/obsidian/profiles/` | System-wide per-app allow-lists |
 | `/opt/obsidian/bin/seccomp_enforcer` | seccomp-bpf filter loader |
 | `/opt/obsidian/bin/obsidian-ipcprobe` | Socket reachability probe used by the audit |
 | `/opt/obsidian/lib/obsidian_core.so` | uname / sysinfo / stat / statx / open / affinity hooks |
@@ -3374,6 +6648,74 @@ distro, is a bug.
 | `/opt/obsidian/fake_root/fonts/fonts.conf` | Deterministic font enumeration |
 | `/opt/obsidian/COVERAGE.md` | This document |
 | `/etc/obsidian/hw-manifest.conf` | Generated per-host spoof/mask manifest |
+
+---
+
+## 9. The strict boundary (opt-in, off by default)
+
+Sections 1 to 8 are about what an application can **learn**. This section
+is about what it can **do**.
+
+The rule is one sentence: **default-deny at every layer, allow only a
+minimal per-application grant.** Not a list of forbidden paths - deny
+everything, then permit only what the application provably needs.
+
+| Layer | Default | Allowed |
+|---|---|---|
+| Filesystem | deny ALL host paths | the app data dir + granted paths |
+| Memory | its own address space | no ptrace, no peer /proc/PID/mem, no /dev/mem, no /proc/kcore |
+| Network | deny all | a granted port, or none |
+| Devices | deny all | only what is needed; hard-deny /dev/mem, /dev/sd*, /dev/nvme* |
+| IPC | deny all | only the needed sockets |
+| Execution | app binary + legitimate JIT | no shell, no python -c, no node -e, no memfd exec |
+| Capabilities | drop all | none |
+| Privilege | NoNewPrivs | none |
+| Namespaces | deny unshare/mount | none |
+| Launch state | inherited fds and credentials scrubbed | stdio only |
+
+Carried by Landlock (filesystem, devices, TCP ports, IPC scoping), a
+hand-assembled seccomp-bpf program (memory, namespaces, kernel surfaces,
+address families), capability dropping and `PR_SET_NO_NEW_PRIVS`. The
+enforcer links no external library, so it does not disappear when
+libseccomp is absent.
+
+### Off unless asked for
+
+    obsidian firefox                     unchanged, nothing below applies
+    OBSIDIAN_HARDEN=1 obsidian firefox   inside the boundary
+
+The installer self-test checks the first line rather than asserting it.
+
+### The method is the same one that produced section 2
+
+Enumerate the host, observe what the application really touches, grant
+exactly that, deny the rest:
+
+    obsidian --profile learn firefox     run it, record every access
+    obsidian --profile build firefox     collapse into a minimal allow-list
+    obsidian --harden-plan firefox       show the boundary, enforce nothing
+    OBSIDIAN_HARDEN=1 obsidian firefox   run it
+
+### Measured, not asserted
+
+`obsidian --harden-test` runs one probe of ~56 attempts twice through
+this launcher, with and without the boundary, and prints the kernel's
+answer to each. On the reference machine: 29 surfaces closed, 18 already
+shut by the base launcher, 0 still open, 0 application capabilities
+broken.
+
+### What it does not close
+
+Side channels - cache timing, branch prediction, power, acoustic,
+electromagnetic - are not syscalls, are invisible to kernel policy, and
+are not closed. Anything below the kernel, including the management
+engine on this processor, is out of reach by construction. The boundary
+also does not decide what an application does with data you did grant
+it. And a surface that is not in the probe is not a surface that is
+proven closed.
+
+Full detail, including every known compatibility cost:
+`docs/STRICT-BOUNDARY.md` in the repository.
 OBSIDIAN_PAYLOAD_COVERAGE_MD
 chmod 644 "$PREFIX/COVERAGE.md"
 ok "COVERAGE.md"
@@ -3414,6 +6756,45 @@ else
     warn "seccomp_enforcer did NOT build - libseccomp-dev is missing."
     warn "Layers 1,2,3,5,6 still work; syscall confinement (layer 4) is off."
     warn "Fix with:  apk add libseccomp-dev  then re-run this installer."
+fi
+
+# ---------------------------------------------------------------------
+# Strict boundary. Deliberately built with no external library: the
+# seccomp program is assembled by hand inside obsidian_harden.c and
+# Landlock is reached through raw syscalls, so a missing libseccomp
+# takes the older enforcer with it but never this one.
+# ---------------------------------------------------------------------
+HARDEN_OK=0
+if $CC -O2 -Wall -o "$BINDIR/obsidian-harden" "$SRCDIR/obsidian_harden.c" \
+        2>"$SRCDIR/.err.harden"; then
+    chmod 755 "$BINDIR/obsidian-harden"
+    HARDEN_OK=1
+    ok "obsidian-harden     (strict boundary enforcer, opt-in)"
+    rm -f "$SRCDIR/.err.harden"
+else
+    rm -f "$BINDIR/obsidian-harden"
+    warn "obsidian-harden did NOT build. The strict boundary will be"
+    warn "unavailable; everything else is unaffected."
+    sed 's/^/        /' "$SRCDIR/.err.harden" >&2 | head -10
+fi
+
+if $CC -O2 -Wall -o "$BINDIR/obsidian-hardenprobe" \
+        "$SRCDIR/obsidian_hardenprobe.c" 2>"$SRCDIR/.err.hardenprobe"; then
+    chmod 755 "$BINDIR/obsidian-hardenprobe"
+    ok "obsidian-hardenprobe (boundary measurement probe)"
+    rm -f "$SRCDIR/.err.hardenprobe"
+else
+    warn "obsidian-hardenprobe did not build; 'obsidian --harden-test'"
+    warn "will not be able to measure anything."
+fi
+
+if $CC $CFLAGS -shared -o "$LIBDIR/obsidian_learn.so" \
+        "$SRCDIR/obsidian_learn.c" -ldl 2>"$SRCDIR/.err.learn"; then
+    ok "obsidian_learn.so   (allow-list discovery)"
+    rm -f "$SRCDIR/.err.learn"
+else
+    warn "obsidian_learn.so did not build; 'obsidian --profile learn'"
+    warn "will record nothing."
 fi
 
 if $CC -O2 -Wall -o "$BINDIR/obsidian-ipcprobe" "$SRCDIR/obsidian_ipcprobe.c" \
@@ -3537,6 +6918,39 @@ if [ "$DO_TEST" -eq 1 ]; then
         SELFTEST_FAIL=$((SELFTEST_FAIL + 1))
     fi
 
+    # 7a. the strict boundary is genuinely inert until asked for.
+    #     This is the property the whole feature rests on, so it is
+    #     tested rather than asserted.
+    if [ "$HARDEN_OK" -eq 1 ]; then
+        _off="$("$CLI_LINK" printf '%s' untouched 2>/dev/null || true)"
+        if [ "$_off" = "untouched" ]; then
+            ok "strict boundary is inert when OBSIDIAN_HARDEN is unset"
+        else
+            fail "the launcher changed behaviour with hardening OFF"
+            SELFTEST_FAIL=$((SELFTEST_FAIL + 1))
+        fi
+
+        _abi="$("$BINDIR/obsidian-harden" --print-plan -- /bin/true 2>&1 |
+                sed -n 's/.*landlock ABI  : //p' | head -1)"
+        if [ -n "$_abi" ] && [ "$_abi" -gt 0 ] 2>/dev/null; then
+            ok "Landlock available: ABI $_abi"
+        else
+            warn "Landlock is not available on this kernel. The strict"
+            warn "boundary will still drop capabilities and filter syscalls,"
+            warn "but it cannot confine the filesystem. Needs Linux 5.13+."
+        fi
+
+        _hard="$(OBSIDIAN_HARDEN=1 "$CLI_LINK" \
+                 "$BINDIR/obsidian-hardenprobe" --quiet 2>/dev/null |
+                 grep -c "DENIED" || true)"
+        if [ "${_hard:-0}" -gt 20 ]; then
+            ok "strict boundary closes ${_hard} measured surfaces"
+        else
+            warn "strict boundary measured only ${_hard:-0} closures;"
+            warn "run 'obsidian --harden-test' to see which."
+        fi
+    fi
+
     # 7. seccomp, if it built.
     if [ "$SECCOMP_OK" -eq 1 ]; then
         _sc="$("$CLI_LINK" sh -c 'grep -m1 Seccomp: /proc/self/status' 2>/dev/null | tr -s ' \t' ' ' | cut -d' ' -f2 || true)"
@@ -3594,6 +7008,28 @@ cat <<'DONEEOF'
   Not covered, by design: the network layer. IP, DNS, routing, real
   MAC addresses over netlink and TLS fingerprints are untouched. Pair
   this with a VPN or a network namespace.
+
+  ---------------------------------------------------------------------
+
+  NEW: the strict boundary. Default-deny at every layer, with a
+  minimal per-application grant. It is OFF unless you ask for it, and
+  everything above behaves exactly as it did before.
+
+      obsidian --harden-test        measure what it closes, and what
+                                    it costs, on this machine
+
+      obsidian --profile learn firefox    run it, record what it needs
+      obsidian --profile build firefox    collapse that into a profile
+      OBSIDIAN_HARDEN=1 obsidian firefox  run it inside the boundary
+
+  Learn first, then harden. A boundary built from a guess breaks
+  applications; a boundary built from a recording of what the
+  application actually did does not.
+
+  What it cannot close: side channels - cache timing, power, acoustic,
+  electromagnetic - and anything running below the kernel, which
+  includes the management engine on this very processor. Those are not
+  kernel-policy problems, and this does not pretend to solve them.
 
 DONEEOF
 

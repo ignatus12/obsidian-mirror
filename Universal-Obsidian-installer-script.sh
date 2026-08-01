@@ -1745,7 +1745,7 @@ fi
 
 if [ "$1" = "--test" ] || [ "$1" = "--audit" ]; then
     shift
-    exec "$OBSIDIAN_DIR/bin/obsidian-audit" "$@"
+    exec /bin/sh "$OBSIDIAN_DIR/bin/obsidian-audit" "$@"
 fi
 
 if [ "$1" = "--coverage" ] || [ "$1" = "--doc" ]; then

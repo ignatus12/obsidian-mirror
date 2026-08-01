@@ -117,7 +117,7 @@ machine:
 | Memory | its own address space only | no `ptrace`, no peer `/proc/PID/mem`, no `/dev/mem`, no `/proc/kcore` |
 | Network | deny all | a granted port, or none |
 | Devices | deny all | only what is needed; hard-deny `/dev/mem`, `/dev/sd*`, `/dev/nvme*` |
-| IPC | deny all | only the needed sockets |
+| IPC | socket paths deny-all, via the filesystem layer | the granted socket paths; abstract sockets and signals are scoped only under `paranoid` or `OBSIDIAN_SCOPE_IPC=1` |
 | Execution | the app binary + legitimate JIT | no shell, no `python -c`, no `node -e`, no memfd exec |
 | Capabilities | drop all | none |
 | Privilege | `NoNewPrivs` | none |

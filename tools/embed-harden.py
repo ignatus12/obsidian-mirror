@@ -187,8 +187,14 @@ if [ "$1" = "--harden-plan" ]; then
         echo "ERROR: $OBSIDIAN_DIR/bin/obsidian-harden is not installed."
         exit 1
     fi
-    OBSIDIAN_HARDEN=plan
-    export OBSIDIAN_HARDEN
+    # --print-plan is what makes this a dry run, so the mode is only
+    # defaulted here, never overwritten: OBSIDIAN_HARDEN=paranoid
+    # obsidian --harden-plan has to report the paranoid boundary, not
+    # silently fall back to the strict one and misreport it.
+    if [ -z "$OBSIDIAN_HARDEN" ]; then
+        OBSIDIAN_HARDEN=plan
+        export OBSIDIAN_HARDEN
+    fi
     exec "$OBSIDIAN_DIR/bin/obsidian-harden" --print-plan -- "$@"
 fi
 ''',
@@ -315,6 +321,17 @@ case "${OBSIDIAN_HARDEN:-}" in
             unset _appkey _pd
         else
             export OBSIDIAN_HARDEN_PROFILE
+        fi
+
+        # The sandbox mounts a fresh tmpfs over /home, which is what
+        # keeps real user data out of it, so a profile under the real
+        # home is unreadable once we are inside. Read it out here,
+        # while it is still reachable, and pass the text down. Without
+        # this the per-application grant silently never loads.
+        if [ -n "${OBSIDIAN_HARDEN_PROFILE:-}" ] &&
+           [ -r "${OBSIDIAN_HARDEN_PROFILE:-}" ]; then
+            OBSIDIAN_HARDEN_PROFILE_DATA=$(cat "$OBSIDIAN_HARDEN_PROFILE")
+            export OBSIDIAN_HARDEN_PROFILE_DATA
         fi
 
         # Launch-state scrub, part one: named credentials.
@@ -572,7 +589,7 @@ everything, then permit only what the application provably needs.
 | Memory | its own address space | no ptrace, no peer /proc/PID/mem, no /dev/mem, no /proc/kcore |
 | Network | deny all | a granted port, or none |
 | Devices | deny all | only what is needed; hard-deny /dev/mem, /dev/sd*, /dev/nvme* |
-| IPC | deny all | only the needed sockets |
+| IPC | socket paths deny-all, via the filesystem layer | the granted socket paths; abstract sockets and signals scoped only under paranoid or OBSIDIAN_SCOPE_IPC=1 |
 | Execution | app binary + legitimate JIT | no shell, no python -c, no node -e, no memfd exec |
 | Capabilities | drop all | none |
 | Privilege | NoNewPrivs | none |

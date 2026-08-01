@@ -1425,16 +1425,22 @@ static uint64_t handled_fs;
 static uint64_t handled_net;
 static uint64_t handled_scope;
 
+/* IOCTL_DEV, handled from Landlock ABI 5, governs ioctl on character
+ * and block devices only. It is included in every grant kind rather
+ * than only in OB_DEV: the decision that matters was made when the
+ * device node was granted at all, and withholding ioctl afterwards
+ * breaks terminals, DRM and sound for no gain. */
 static uint64_t rights_for(enum ob_kind kind, int isdir)
 {
     uint64_t r = 0;
 
     switch (kind) {
     case OB_RO:
-        r = OB_FS_READ_FILE | OB_FS_READ_DIR;
+        r = OB_FS_READ_FILE | OB_FS_READ_DIR | OB_FS_IOCTL_DEV;
         break;
     case OB_RX:
-        r = OB_FS_READ_FILE | OB_FS_READ_DIR | OB_FS_EXECUTE;
+        r = OB_FS_READ_FILE | OB_FS_READ_DIR | OB_FS_EXECUTE |
+            OB_FS_IOCTL_DEV;
         break;
     case OB_RW:
     case OB_RWX:
@@ -1442,7 +1448,7 @@ static uint64_t rights_for(enum ob_kind kind, int isdir)
             OB_FS_REMOVE_DIR | OB_FS_REMOVE_FILE | OB_FS_MAKE_CHAR |
             OB_FS_MAKE_DIR | OB_FS_MAKE_REG | OB_FS_MAKE_SOCK |
             OB_FS_MAKE_FIFO | OB_FS_MAKE_BLOCK | OB_FS_MAKE_SYM |
-            OB_FS_REFER | OB_FS_TRUNCATE;
+            OB_FS_REFER | OB_FS_TRUNCATE | OB_FS_IOCTL_DEV;
         if (kind == OB_RWX) r |= OB_FS_EXECUTE;
         break;
     case OB_DEV:
@@ -2177,6 +2183,34 @@ static void set_opt(const char *key, const char *val)
     else if (strcmp(key, "verbose") == 0)    cfg_verbose = on;
 }
 
+/* One profile line, parsed in place. Kept separate so the file
+ * reader and the environment reader cannot drift into accepting
+ * two slightly different syntaxes. */
+static void profile_line(char *line)
+{
+    char *eq, *key, *val, *nl;
+
+    nl = strpbrk(line, "\r\n");
+    if (nl) *nl = 0;
+    key = line;
+    while (*key == ' ' || *key == '\t') key++;
+    if (*key == '#' || *key == 0) return;
+    eq = strchr(key, '=');
+    if (!eq) return;
+    *eq = 0;
+    val = eq + 1;
+
+    if      (strcmp(key, "allow.ro") == 0)   add_grant(val, OB_RO);
+    else if (strcmp(key, "allow.rx") == 0)   add_grant(val, OB_RX);
+    else if (strcmp(key, "allow.rw") == 0)   add_grant(val, OB_RW);
+    else if (strcmp(key, "allow.rwx") == 0)  add_grant(val, OB_RWX);
+    else if (strcmp(key, "allow.dev") == 0)  add_grant(val, OB_DEV);
+    else if (strcmp(key, "allow.exec") == 0) add_grant(val, OB_RX);
+    else if (strcmp(key, "allow.net") == 0)  add_net_grant(val);
+    else if (strcmp(key, "deny") == 0)       add_deny(val);
+    else if (strncmp(key, "opt.", 4) == 0)   set_opt(key + 4, val);
+}
+
 static void read_profile(const char *path)
 {
     FILE *f = fopen(path, "r");
@@ -2187,30 +2221,37 @@ static void read_profile(const char *path)
         return;
     }
 
-    while (fgets(line, sizeof(line), f)) {
-        char *eq, *key, *val, *nl;
-        nl = strpbrk(line, "\r\n");
-        if (nl) *nl = 0;
-        key = line;
-        while (*key == ' ' || *key == '\t') key++;
-        if (*key == '#' || *key == 0) continue;
-        eq = strchr(key, '=');
-        if (!eq) continue;
-        *eq = 0;
-        val = eq + 1;
-
-        if      (strcmp(key, "allow.ro") == 0)   add_grant(val, OB_RO);
-        else if (strcmp(key, "allow.rx") == 0)   add_grant(val, OB_RX);
-        else if (strcmp(key, "allow.rw") == 0)   add_grant(val, OB_RW);
-        else if (strcmp(key, "allow.rwx") == 0)  add_grant(val, OB_RWX);
-        else if (strcmp(key, "allow.dev") == 0)  add_grant(val, OB_DEV);
-        else if (strcmp(key, "allow.exec") == 0) add_grant(val, OB_RX);
-        else if (strcmp(key, "allow.net") == 0)  add_net_grant(val);
-        else if (strcmp(key, "deny") == 0)       add_deny(val);
-        else if (strncmp(key, "opt.", 4) == 0)   set_opt(key + 4, val);
-    }
+    while (fgets(line, sizeof(line), f)) profile_line(line);
     fclose(f);
     vlog("profile loaded: %s", path);
+}
+
+/* The launcher mounts a fresh tmpfs over /home on purpose - that is
+ * what keeps the real user data out of the sandbox - which also means
+ * a profile stored under the real home is not reachable by path from
+ * in here. The launcher therefore reads the file while it is still
+ * reachable, outside, and passes the text down in the environment.
+ * Without this the per-application grant silently never loads and the
+ * boundary quietly falls back to its defaults, which is the worst of
+ * both worlds: the user believes a profile is in force and it is not. */
+static void read_profile_data(const char *text)
+{
+    char line[4096];
+    const char *p = text;
+
+    while (*p) {
+        const char *e = strchr(p, '\n');
+        size_t n;
+
+        if (!e) e = p + strlen(p);
+        n = (size_t)(e - p);
+        if (n >= sizeof(line)) n = sizeof(line) - 1;
+        memcpy(line, p, n);
+        line[n] = 0;
+        profile_line(line);
+        p = (*e == '\n') ? e + 1 : e;
+    }
+    vlog("profile loaded from the environment");
 }
 
 /* The hard-deny set. These are never granted, and any grant that
@@ -2492,8 +2533,13 @@ int main(int argc, char **argv)
     seed_hard_deny();
     add_deny_list(getenv("OBSIDIAN_DENY_PATHS"));
 
-    v = getenv("OBSIDIAN_HARDEN_PROFILE");
-    if (v && *v) read_profile(v);
+    v = getenv("OBSIDIAN_HARDEN_PROFILE_DATA");
+    if (v && *v) {
+        read_profile_data(v);
+    } else {
+        v = getenv("OBSIDIAN_HARDEN_PROFILE");
+        if (v && *v) read_profile(v);
+    }
 
     if (getenv("OBSIDIAN_HARDEN_NO_DEFAULTS")) cfg_defaults = 0;
     if (cfg_defaults) seed_defaults(binpath);
@@ -2510,11 +2556,13 @@ int main(int argc, char **argv)
     v = getenv("OBSIDIAN_SCOPE_IPC");
     if (v && *v) cfg_scope_ipc = (*v == '1');
     if (cfg_scope_ipc < 0) {
-        /* Auto: scoping abstract unix sockets breaks X11 clients,
-         * which reach the display through an abstract socket. On a
-         * pure Wayland session there is nothing to break. */
-        const char *disp = getenv("DISPLAY");
-        cfg_scope_ipc = (disp && *disp) ? 0 : 1;
+        /* Off in strict mode. Scoping abstract unix sockets is the one
+         * layer here that breaks a whole display protocol when it is
+         * wrong - every X11 client reaches its display that way, and
+         * some session buses are abstract too. Paranoid mode turns it
+         * on, and OBSIDIAN_SCOPE_IPC=1 turns it on deliberately, but
+         * it is not switched on behind anyone. */
+        cfg_scope_ipc = 0;
     }
     if (getenv("OBSIDIAN_ALLOW_NESTED_NS")) cfg_nested_ns = 1;
     if (getenv("OBSIDIAN_HARDEN_KEEP_CAPS")) cfg_keep_caps = 1;
@@ -4287,8 +4335,14 @@ if [ "$1" = "--harden-plan" ]; then
         echo "ERROR: $OBSIDIAN_DIR/bin/obsidian-harden is not installed."
         exit 1
     fi
-    OBSIDIAN_HARDEN=plan
-    export OBSIDIAN_HARDEN
+    # --print-plan is what makes this a dry run, so the mode is only
+    # defaulted here, never overwritten: OBSIDIAN_HARDEN=paranoid
+    # obsidian --harden-plan has to report the paranoid boundary, not
+    # silently fall back to the strict one and misreport it.
+    if [ -z "$OBSIDIAN_HARDEN" ]; then
+        OBSIDIAN_HARDEN=plan
+        export OBSIDIAN_HARDEN
+    fi
     exec "$OBSIDIAN_DIR/bin/obsidian-harden" --print-plan -- "$@"
 fi
 
@@ -4589,6 +4643,17 @@ case "${OBSIDIAN_HARDEN:-}" in
             unset _appkey _pd
         else
             export OBSIDIAN_HARDEN_PROFILE
+        fi
+
+        # The sandbox mounts a fresh tmpfs over /home, which is what
+        # keeps real user data out of it, so a profile under the real
+        # home is unreadable once we are inside. Read it out here,
+        # while it is still reachable, and pass the text down. Without
+        # this the per-application grant silently never loads.
+        if [ -n "${OBSIDIAN_HARDEN_PROFILE:-}" ] &&
+           [ -r "${OBSIDIAN_HARDEN_PROFILE:-}" ]; then
+            OBSIDIAN_HARDEN_PROFILE_DATA=$(cat "$OBSIDIAN_HARDEN_PROFILE")
+            export OBSIDIAN_HARDEN_PROFILE_DATA
         fi
 
         # Launch-state scrub, part one: named credentials.
@@ -6666,7 +6731,7 @@ everything, then permit only what the application provably needs.
 | Memory | its own address space | no ptrace, no peer /proc/PID/mem, no /dev/mem, no /proc/kcore |
 | Network | deny all | a granted port, or none |
 | Devices | deny all | only what is needed; hard-deny /dev/mem, /dev/sd*, /dev/nvme* |
-| IPC | deny all | only the needed sockets |
+| IPC | socket paths deny-all, via the filesystem layer | the granted socket paths; abstract sockets and signals scoped only under paranoid or OBSIDIAN_SCOPE_IPC=1 |
 | Execution | app binary + legitimate JIT | no shell, no python -c, no node -e, no memfd exec |
 | Capabilities | drop all | none |
 | Privilege | NoNewPrivs | none |

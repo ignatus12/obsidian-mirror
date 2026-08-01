@@ -141,6 +141,23 @@ if [ -f "$LAUNCH" ]; then
     else
         bad "obsidian-launch: the --test nested-namespace fix is gone"
     fi
+    # The sandbox mounts a tmpfs over /home, so a profile that is only
+    # passed by path is unreadable once inside and the per-app grant
+    # silently never loads. The launcher must read it out here.
+    if grep -q 'OBSIDIAN_HARDEN_PROFILE_DATA=' "$LAUNCH"; then
+        ok "obsidian-launch: profile is read out before the home tmpfs hides it"
+    else
+        bad "obsidian-launch: profile passed by path only; it will not load in the sandbox"
+    fi
+fi
+
+HARDENC="$WORK/OBSIDIAN_PAYLOAD_HARDEN_C__obsidian_harden.c"
+if [ -f "$HARDENC" ]; then
+    if grep -q 'OBSIDIAN_HARDEN_PROFILE_DATA' "$HARDENC"; then
+        ok "obsidian_harden.c: accepts the profile handed down in the environment"
+    else
+        bad "obsidian_harden.c: no environment profile reader; per-app grants will not load"
+    fi
 fi
 
 printf '\n  %d passed, %d failed\n\n' "$PASS" "$FAIL"

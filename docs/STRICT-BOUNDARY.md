@@ -25,7 +25,7 @@ the installer's self-test checks that claim rather than asserting it.
 | **Memory** | own address space only | no `ptrace`, `process_vm_readv/writev`, `/proc/PID/mem`, `memfd`+`execve`, `/dev/mem`, `/proc/kcore` |
 | **Network** | deny all | granted destination port, or none |
 | **Devices** (`/dev`) | deny all | only what is needed (`dri`, `input`); hard-deny `/dev/mem`, `/dev/kmem`, `/dev/sd*`, `/dev/nvme*` |
-| **IPC** | deny all | only the needed sockets; abstract unix sockets and signals scoped to the app |
+| **IPC** | socket paths deny-all, inherited from the filesystem layer | the granted socket paths; abstract unix sockets and signals are scoped to the app only under `paranoid` (see §9) |
 | **Execution** | the app binary + legitimate JIT | no `sh`/`python -c`/`node -e` spawn, no untrusted `dlopen`, no memfd exec |
 | **Capabilities** | drop all | none |
 | **Privilege** | `NoNewPrivs` | none |
@@ -48,7 +48,7 @@ at the wrong layer is a policy with a hole in it.
 | Filesystem, devices | **Landlock** ruleset, default-deny | `obsidian_harden.c` |
 | Network (TCP ports) | **Landlock** network rules, ABI 4+ | `obsidian_harden.c` |
 | Network (address families) | **seccomp-bpf** on `socket`/`socketpair` argument 0 | `obsidian_harden.c` |
-| IPC scoping | **Landlock** `scoped`, ABI 6+ | `obsidian_harden.c` |
+| IPC scoping (paranoid only) | **Landlock** `scoped`, ABI 6+ | `obsidian_harden.c` |
 | Memory, namespaces, kernel surfaces | **seccomp-bpf** deny list, hand-assembled | `obsidian_harden.c` |
 | Execution | **Landlock** `EXECUTE` right + seccomp on `execveat(AT_EMPTY_PATH)` | `obsidian_harden.c` |
 | Capabilities | `PR_CAPBSET_DROP`, `PR_CAP_AMBIENT_CLEAR_ALL`, `capset` | `obsidian_harden.c` |
@@ -202,8 +202,9 @@ OBSIDIAN_ALLOW_NET=tcp:443 \
 | `OBSIDIAN_ALLOW_NESTED_NS` | let the app build its own namespaces |
 | `OBSIDIAN_DENY_PATHS` | add to the hard-deny set |
 | `OBSIDIAN_HARDEN_PROFILE` | use a specific profile file |
+| `OBSIDIAN_HARDEN_PROFILE_DATA` | profile text itself, set by the launcher so the profile survives the home tmpfs; wins over the path |
 | `OBSIDIAN_HARDEN_FAIL_CLOSED` | refuse to start if any layer fails to load |
-| `OBSIDIAN_SCOPE_IPC` | `1`/`0`, override the X11 auto-detection |
+| `OBSIDIAN_SCOPE_IPC` | `1` to scope abstract sockets and signals; default `0` in `strict`, `1` in `paranoid` |
 | `OBSIDIAN_HARDEN_KEEP_FDS` | keep inherited descriptors |
 | `OBSIDIAN_HARDEN_NO_DEFAULTS` | drop the base allow-list; grant everything by hand |
 
@@ -228,6 +229,21 @@ opt.verbose=1
 ```
 
 `~` and `$VAR` are expanded.
+
+### How the profile reaches the enforcer
+
+The launcher mounts a fresh tmpfs over `/home` - that is what keeps real
+user data out of the sandbox - so by the time the enforcer runs, a
+profile stored under the real home is no longer reachable by path. The
+launcher therefore reads the file *before* entering the sandbox and
+passes its text down in `OBSIDIAN_HARDEN_PROFILE_DATA`, which the
+enforcer parses in preference to `OBSIDIAN_HARDEN_PROFILE`.
+
+This is worth stating because the failure it replaces was silent: the
+enforcer would warn that the profile could not be read, fall back to its
+own defaults, and run the application inside a boundary the user
+believed had been tailored to it. `verify-installer.sh` now asserts both
+halves of the hand-off so it cannot regress quietly.
 
 ---
 
@@ -297,9 +313,10 @@ raises the cost of an escape; it does not make one impossible.
 Honest list of what the boundary is expected to break, so you find out
 here rather than in a crash:
 
-- **X11 clients** if IPC scoping is on. Auto-detected from `DISPLAY` and
-  left off when X11 is present, but if you launch under a compositor that
-  sets `DISPLAY` late, set `OBSIDIAN_SCOPE_IPC=0`.
+- **X11 clients** if IPC scoping is on. It is **off in `strict`** for
+  exactly this reason and only on in `paranoid`; `OBSIDIAN_SCOPE_IPC=1`
+  turns it on deliberately. Every X11 client reaches its display over an
+  abstract unix socket, and some session buses are abstract too.
 - **Chromium and Electron zygotes**, which build their own user
   namespaces. `OBSIDIAN_ALLOW_NESTED_NS=1` gives that back, at the cost
   of the namespace layer.

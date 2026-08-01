@@ -26,7 +26,7 @@ the installer's self-test checks that claim rather than asserting it.
 | **Network** | deny all | granted destination port, or none |
 | **Devices** (`/dev`) | deny all | only what is needed (`dri`, `input`); hard-deny `/dev/mem`, `/dev/kmem`, `/dev/sd*`, `/dev/nvme*` |
 | **IPC** | socket paths deny-all, inherited from the filesystem layer | the granted socket paths; abstract unix sockets and signals are scoped to the app only under `paranoid` (see §9) |
-| **Execution** | the app binary + legitimate JIT | no `sh`/`python -c`/`node -e` spawn, no untrusted `dlopen`, no memfd exec |
+| **Execution** | the app binary + legitimate JIT | no `sh`/`python -c`/`node -e` spawn, no memfd exec. **`dlopen` of a library the app wrote itself is NOT closed** - measured, see §9 |
 | **Capabilities** | drop all | none |
 | **Privilege** | `NoNewPrivs` | none |
 | **Namespaces** | deny `unshare`/`mount` | none |
@@ -305,6 +305,25 @@ one nobody has looked at yet. If you find one, it belongs in
 
 **Kernel bugs.** Landlock and seccomp are code. Code has defects. This
 raises the cost of an escape; it does not make one impossible.
+
+**Code the application wrote itself, loaded with `dlopen`.** The strict
+boundary model asks for "no untrusted `dlopen`". This does not deliver
+it, and the report now says so out loud rather than leaving the row
+blank. Landlock checks its `EXECUTE` right when a file is opened *to be
+executed*; a shared library is opened `O_RDONLY` and then mapped
+`PROT_EXEC`, so any directory granted for writing is also a directory
+the application can author code in and load. seccomp cannot rescue it
+either: at `mmap` time it sees `PROT_EXEC` and a descriptor number,
+never the path behind it, and refusing every file-backed executable
+mapping would refuse every shared library in the process.
+
+Closing it needs an LSM that is path-aware at mapping time - SELinux
+`execmod`, or an AppArmor `m` rule - which is a different mechanism than
+the two this enforcer is built on. What is left is narrowing the grant:
+an application with no writable directory it can also read has nowhere
+to stage the library, so the smaller the RW grant, the smaller this hole
+gets. `obsidian --harden-test` measures it as **`execute a library it
+wrote itself`** and reports it as still open, on purpose.
 
 ---
 

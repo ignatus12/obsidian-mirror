@@ -120,6 +120,7 @@ BEGIN {
     label["exec.node"]           = "spawn a node interpreter"
     label["exec.perl"]           = "spawn a perl interpreter"
     label["exec.memfd"]          = "execute code that has no file"
+    label["exec.wx_file"]        = "execute a library it wrote itself"
     label["jit.anon_exec"]       = "JIT-compile in anonymous memory"
     label["mem.ptrace"]          = "attach a debugger to another process"
     label["mem.process_vm_readv"]  = "read another process memory"

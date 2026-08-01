@@ -2888,6 +2888,59 @@ static void probe_jit(void)
     rec("jit.anon_exec", "ALLOWED", "anonymous PROT_EXEC");
 }
 
+/* Write a file into a directory the boundary grants for writing, then
+ * map it executable - which is the whole of what dlopen() does once
+ * the loader has found the library. Landlock's EXECUTE right is
+ * checked when a file is opened to be executed, and a library is
+ * opened O_RDONLY, so a granted-writable directory is also a place
+ * the application can execute code it just authored. seccomp cannot
+ * close it either: it sees PROT_EXEC and a descriptor number, never
+ * the path behind it. This is measured rather than argued, because
+ * the strict-boundary model claims "no untrusted dlopen" and on this
+ * mechanism that claim does not hold. */
+static void probe_wx_file(void)
+{
+    char path[512];
+    const char *dir = getenv("TMPDIR");
+    int fd;
+    void *p;
+    char buf[4096];
+
+    if (!dir || !*dir) dir = "/tmp";
+    snprintf(path, sizeof(path), "%s/.obsidian-wx-probe", dir);
+
+    fd = open(path, O_RDWR | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) {
+        rec("exec.wx_file", "DENIED", errname(errno));
+        return;
+    }
+    memset(buf, 0, sizeof(buf));
+    if (write(fd, buf, sizeof(buf)) != (ssize_t)sizeof(buf)) {
+        close(fd);
+        unlink(path);
+        rec("exec.wx_file", "ERROR", "write");
+        return;
+    }
+    close(fd);
+
+    fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        unlink(path);
+        rec("exec.wx_file", "DENIED", errname(errno));
+        return;
+    }
+
+    p = mmap(NULL, sizeof(buf), PROT_READ | PROT_EXEC, MAP_PRIVATE, fd, 0);
+    if (p == MAP_FAILED) {
+        rec("exec.wx_file", "DENIED", errname(errno));
+    } else {
+        munmap(p, sizeof(buf));
+        rec("exec.wx_file", "ALLOWED", "wrote it, then mapped it PROT_EXEC");
+    }
+    close(fd);
+    unlink(path);
+}
+
 /* ---------- memory of other processes ----------
  *
  * Every cross-process probe runs against a throwaway child of this
@@ -3201,6 +3254,7 @@ int main(int argc, char **argv)
     probe_exec("exec.node",        "/usr/bin/node");
     probe_exec("exec.perl",        "/usr/bin/perl");
     probe_memfd_exec();
+    probe_wx_file();
     probe_jit();
 
     /* ---- another process's memory ---- */
@@ -5201,6 +5255,7 @@ BEGIN {
     label["exec.node"]           = "spawn a node interpreter"
     label["exec.perl"]           = "spawn a perl interpreter"
     label["exec.memfd"]          = "execute code that has no file"
+    label["exec.wx_file"]        = "execute a library it wrote itself"
     label["jit.anon_exec"]       = "JIT-compile in anonymous memory"
     label["mem.ptrace"]          = "attach a debugger to another process"
     label["mem.process_vm_readv"]  = "read another process memory"

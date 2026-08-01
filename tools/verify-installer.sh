@@ -18,7 +18,7 @@
 
 set -e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-INST="$ROOT/Universal-Obsidian-installer-script.sh"
+INST="$ROOT/Universal-Obsidian-Mirror-installer-script.sh"
 WORK="${TMPDIR:-/tmp}/obsidian-verify.$$"
 mkdir -p "$WORK"
 trap 'rm -rf "$WORK"' EXIT

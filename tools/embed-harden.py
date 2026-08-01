@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Splice the strict-boundary components into
-Universal-Obsidian-installer-script.sh.
+Universal-Obsidian-Mirror-installer-script.sh.
 
 The installer is the single artefact a user runs, so every source
 file has to live inside it as an embedded payload. Keeping that
@@ -21,7 +21,20 @@ import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-INSTALLER = os.path.join(ROOT, "Universal-Obsidian-installer-script.sh")
+
+# The build has one input and two outputs. installer/base.sh is the
+# payload-free installer and is the only thing edited by hand; the
+# shipped script is always regenerated from it, so a rebuild is
+# reproducible by anyone with the repository rather than depending on
+# a particular commit in the history.
+BASE = os.path.join(ROOT, "installer", "base.sh")
+INSTALLER = os.path.join(ROOT, "Universal-Obsidian-Mirror-installer-script.sh")
+
+# The script was called Universal-Obsidian-installer-script.sh before
+# the name was aligned with the project. Links to that raw URL exist,
+# so the same bytes are still written under the old name. It is
+# generated, never edited, so the two cannot drift apart.
+LEGACY = os.path.join(ROOT, "Universal-Obsidian-installer-script.sh")
 
 MARKER = "OBSIDIAN_PAYLOAD_HARDEN_C"
 
@@ -62,11 +75,13 @@ def replace_once(text, old, new):
 
 
 def main():
-    src = open(INSTALLER).read()
+    src = open(BASE).read()
 
     if MARKER in src:
-        print("installer already carries the strict-boundary payloads")
-        return 0
+        raise SystemExit(
+            "installer/base.sh already carries payloads; it must stay "
+            "payload-free so the build is reproducible"
+        )
 
     # ---------------------------------------------------------------
     # 1. new directories
@@ -624,8 +639,16 @@ exactly that, deny the rest:
 `obsidian --harden-test` runs one probe of ~56 attempts twice through
 this launcher, with and without the boundary, and prints the kernel's
 answer to each. On the reference machine: 29 surfaces closed, 18 already
-shut by the base launcher, 0 still open, 0 application capabilities
+shut by the base launcher, 1 still open, 0 application capabilities
 broken.
+
+The one still open is reported rather than hidden: an application can
+write a library into a directory it was granted for writing and map it
+executable. Landlock checks EXECUTE when a file is opened to be
+executed, and a library is opened read-only, so neither it nor seccomp
+can refuse that without refusing every shared library the process needs.
+docs/CONFORMANCE.md audits all ten layers and names the three that fall
+short of the model.
 
 ### What it does not close
 
@@ -642,10 +665,13 @@ Full detail, including every known compatibility cost:
 OBSIDIAN_PAYLOAD_COVERAGE_MD""",
     )
 
-    with open(INSTALLER, "w") as f:
-        f.write(src)
+    for out in (INSTALLER, LEGACY):
+        with open(out, "w") as f:
+            f.write(src)
 
     print("installer regenerated: %d bytes, %d lines" % (len(src), src.count("\n")))
+    print("  %s" % os.path.basename(INSTALLER))
+    print("  %s (same bytes, kept for existing links)" % os.path.basename(LEGACY))
     return 0
 
 

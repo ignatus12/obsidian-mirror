@@ -12,7 +12,8 @@ not and cannot do.
 
 It is **off by default.** Nothing in this document happens unless
 `OBSIDIAN_HARDEN` is set. With it unset, `obsidian <application>` is the
-same launcher that produced the 93% metadata result, byte for byte, and
+same launcher that produced the metadata result (91% of 74 checks on
+this box, and it varies by host), byte for byte, and
 the installer's self-test checks that claim rather than asserting it.
 
 ---
@@ -98,7 +99,7 @@ file — drops everything the base allow-list already covers, and flags
 every interpreter the application started as a line you have to decide
 about by hand rather than granting silently.
 
-This is the same reason the metadata layer reached 93% without breaking
+This is the same reason the metadata layer reached its result without breaking
 applications: measure the real thing, then write the rule.
 
 **Learn first, then harden.** A boundary built from a guess breaks
@@ -111,7 +112,7 @@ actually did does not.
 
 `obsidian --harden-test` runs the same probe twice through the same
 launcher — once as it ships, once with `OBSIDIAN_HARDEN=1` — and prints
-the kernel's answer to each of ~56 attempts, side by side. It reports
+the kernel's answer to each of 51 attempts, side by side. It reports
 what the kernel did, not what the policy intended. Where those disagree,
 the kernel is right and this document is wrong.
 
@@ -122,11 +123,17 @@ chain — every closure below came from the new enforcer alone):
 ```
   surfaces the boundary closed                  29
   surfaces already shut by the base launcher    18
-  surfaces still open under the boundary         0
+  surfaces still open under the boundary         1
   application capabilities broken                0
   present but unreachable                        2
   inconclusive on this machine                   1
 ```
+
+The one still open is `execute a library it wrote itself`: the app
+writes a file into a directory it was granted for writing, then maps it
+`PROT_EXEC`. Neither Landlock nor seccomp can refuse that without
+refusing every shared library in the process. It is described in full in
+section 7 and audited in `docs/CONFORMANCE.md`.
 
 Closed, measured, one line each: read the host SSH keys · read every
 system log · read the kernel and initramfs · read the kernel symbol table
@@ -298,7 +305,7 @@ can touch. It does not decide what it does with what you gave it. That is
 what "minimal grant" means and why the grant list is worth reading before
 you accept it.
 
-**Whatever is not measured.** The report covers ~56 attempts. A surface
+**Whatever is not measured.** The report covers 51 attempts. A surface
 that is not in that list is not a surface that is proven closed — it is
 one nobody has looked at yet. If you find one, it belongs in
 `obsidian_hardenprobe.c`, where the next person's report will include it.

@@ -4920,12 +4920,13 @@ mount --make-rprivate / 2>/dev/null || true
 mount -t proc proc /proc
 mount -t tmpfs tmpfs /home
 mkdir -p /home/.fake/sys_spoofs
-chmod 700 "/home/$FAKE_USER"
 
 # Persistent per-application home directory. By default the app keeps
 # its preferences, caches and config across launches; only the spoofed
 # identity (hostname, machine-id, ...) is regenerated each time. Set
-# OBSIDIAN_FRESH=1 for a throwaway launch.
+# OBSIDIAN_FRESH=1 for a throwaway launch. The home directory is created
+# in the branch below BEFORE the chmod runs: set -e is active here, and a
+# chmod on a directory that does not exist yet would abort the launch.
 if [ -n "$OBSIDIAN_FRESH" ] && [ "$OBSIDIAN_FRESH" != "0" ]; then
     mkdir -p "/home/$FAKE_USER"
 else
@@ -4947,6 +4948,7 @@ else
         mkdir -p "/home/$FAKE_USER"
     fi
 fi
+chmod 700 "/home/$FAKE_USER"
 mkdir -p "/home/$FAKE_USER/.cache/fontconfig"
 mkdir -p "/home/$FAKE_USER/.config"
 

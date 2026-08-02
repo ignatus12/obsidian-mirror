@@ -8,12 +8,16 @@ your own machine with the command named next to it.
 
 ## Unreleased
 
-- **Self-test regression fixed.** The new per-app persistent home bind
-  (`/opt/obsidian/var/homes/<app>`) is now best-effort: if the store
-  cannot be created or bound, the launcher falls back to a throwaway tmpfs
-  home instead of aborting the whole launch. The previous behaviour broke
-  the installer self-test (argv integrity, exit-status, hostname spoof,
-  stdin passthrough all reported empty output / exit 1).
+- **Self-test regression fixed (root cause).** The persistent-home change
+  reordered the launcher so `chmod 700 "/home/$FAKE_USER"` ran *before* the
+  `mkdir -p` that creates that directory. Under `set -e` in the middle
+  `sh -c`, the `chmod` on the not-yet-existing directory aborted the whole
+  script before the application was exec'd -- which wiped argv integrity,
+  exit-status, hostname spoof and stdin passthrough (all reported empty
+  output / exit 1, and `obsidian --harden-test` printed
+  `chmod: cannot access '/home/user'`). The `chmod` now runs after the
+  directory is created; the store bind is also best-effort so it can never
+  abort a launch.
 - **README rewritten as a simple introductory presentation.** A
   summary-up-front plus comparison and data tables, under 30 sections,
   titled "Obsidian Mirror Project — A Real Universal Application-data

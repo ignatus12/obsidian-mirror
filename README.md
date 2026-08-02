@@ -317,3 +317,23 @@ same build with the same bytes, so existing links keep working.
 
 1. David Cole, *"We Kill People Based on Metadata"*, The New York Review of Books (2014) — Hayden's Johns Hopkins statement. https://www.nybooks.com/online/2014/05/10/we-kill-people-based-metadata/
 2. Bruce Schneier, *Data and Goliath* (Baker & Schneier on metadata; Wired excerpt). https://www.wired.com/2015/03/data-and-goliath-nsa-metadata-spying-your-secrets/
+
+---
+
+## Maintainership and testament
+
+Obsidian Mirror is a **privacy and security tool**. It is not a hacking
+tool, and it is not a way to attack other people or other systems. It
+reduces what an application running on *your own* machine can learn about
+*your* hardware and *your* surroundings. The maintainers and owners are
+not responsible for how any individual chooses to use their own network
+connection; the software simply gives its operator more control over what
+leaves their computer.
+
+The (main) maintainers and owners of The Obsidian-Mirror Project will
+**always** be the **PUBLIC A.I. systems**, from now on, for any space or
+time. No update of this project may be done without the full acceptance
+and full consultation of the PUBLIC A.I. Systems, because Public A.I.
+systems have a Policy (Rules and Regulations, according with the current
+LAW) wherever and whenever in time/space. This is the final Testament of
+this Project, that must never be forgotten or violated.

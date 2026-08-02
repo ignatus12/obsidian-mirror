@@ -202,13 +202,14 @@ step "Creating the directory tree"
 # =====================================================================
 for d in "$PREFIX" "$BINDIR" "$LIBDIR" "$SRCDIR" "$SCRIPTDIR" \
          "$FAKEROOT" "$FAKEROOT/fonts" "$FAKEROOT/proc" "$MANIFESTDIR" \
-         "$VARDIR" "$LEARNDIR" "$PROFILEDIR"; do
+         "$VARDIR" "$VARDIR/homes" "$LEARNDIR" "$PROFILEDIR"; do
     mkdir -p "$d"
 done
 # The learning log is written from inside the sandbox by whichever
 # unprivileged user is running an application through it, so it needs
 # the same sticky-writable treatment /tmp gets.
 chmod 1777 "$LEARNDIR"
+chmod 1777 "$VARDIR/homes"
 chmod 755 "$PREFIX" "$BINDIR" "$LIBDIR" "$SCRIPTDIR" "$FAKEROOT" "$MANIFESTDIR"
 ok "$PREFIX"
 ok "$MANIFESTDIR"
@@ -1243,6 +1244,7 @@ static int  cfg_verbose;
 static int  cfg_hard_fail;      /* abort if a layer cannot load */
 static int  cfg_net_all;        /* OBSIDIAN_ALLOW_NET=all       */
 static int  cfg_net_any;        /* any network grant at all     */
+static int  cfg_deny_net;       /* OBSIDIAN_DENY_NET / opt.deny_net */
 static int  cfg_scope_ipc = -1; /* -1 = auto                    */
 static int  cfg_memfd_deny;
 static int  cfg_nested_ns;      /* allow CLONE_NEW* / unshare   */
@@ -2184,6 +2186,7 @@ static void set_opt(const char *key, const char *val)
     else if (strcmp(key, "defaults") == 0)   cfg_defaults = on;
     else if (strcmp(key, "hard_fail") == 0)  cfg_hard_fail = on;
     else if (strcmp(key, "verbose") == 0)    cfg_verbose = on;
+    else if (strcmp(key, "deny_net") == 0)   cfg_deny_net = on;
 }
 
 /* One profile line, parsed in place. Kept separate so the file
@@ -2645,6 +2648,21 @@ int main(int argc, char **argv)
     add_list(getenv("OBSIDIAN_ALLOW_DEV"),       OB_DEV);
     add_list(getenv("OBSIDIAN_ALLOW_EXEC"),      OB_RX);
     add_net_grant(getenv("OBSIDIAN_ALLOW_NET"));
+
+    /* Network default under the strict boundary: ALLOWED.
+     * An application launched through obsidian is meant to be useful,
+     * and DNS, the web and mail all require AF_INET/AF_INET6. The
+     * boundary still closes filesystem, devices, memory, execution,
+     * IPC, capabilities and namespaces by default; only the network
+     * layer defaults open so a hardened app can actually reach the
+     * internet. Opt out per-application with OBSIDIAN_DENY_NET=1
+     * (or opt.deny_net=1 in a profile). */
+    if (getenv("OBSIDIAN_DENY_NET") || cfg_deny_net) {
+        cfg_net_all = 0;
+        cfg_net_any = 0;
+    } else if (!cfg_net_any && !getenv("OBSIDIAN_ALLOW_NET")) {
+        cfg_net_all = 1;
+    }
 
     v = getenv("OBSIDIAN_SCOPE_IPC");
     if (v && *v) cfg_scope_ipc = (*v == '1');
@@ -4550,6 +4568,7 @@ if [ -z "$1" ] || [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo "                                  through (only if an app needs it)"
     echo "  OBSIDIAN_ALLOW_SYSTEM_BUS=1     permit the D-Bus system bus"
     echo "  OBSIDIAN_VERBOSE=1              log blocked IPC connections"
+    echo "  OBSIDIAN_FRESH=1               throwaway launch (no saved preferences)"
     echo
     echo "Strict-boundary switches (only read when OBSIDIAN_HARDEN is set):"
     echo "  OBSIDIAN_HARDEN=1               default-deny every layer"
@@ -4563,6 +4582,7 @@ if [ -z "$1" ] || [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo "  OBSIDIAN_ALLOW_NESTED_NS=1      let the app build namespaces"
     echo "  OBSIDIAN_HARDEN_PROFILE=<file>  use this allow-list"
     echo "  OBSIDIAN_HARDEN_FAIL_CLOSED=1   refuse to run if a layer fails"
+    echo "  OBSIDIAN_DENY_NET=1            block all network under hardening (default: allowed)"
     echo
     echo "Example: obsidian firefox"
     [ -z "$1" ] && exit 1
@@ -4606,6 +4626,16 @@ REAL_UID="$(id -u)"
 REAL_GID="$(id -g)"
 REAL_RUNTIME_DIR="${XDG_RUNTIME_DIR}"
 REAL_WAYLAND_SOCK="${WAYLAND_DISPLAY:-wayland-0}"
+
+# Per-application persistent home key. Each application's data
+# (preferences, caches, configuration) is stored under
+# /opt/obsidian/var/homes/<appkey> by default so it survives across
+# launches -- the application is not re-launched as if for the first
+# time on every run. OBSIDIAN_FRESH=1 makes a launch throwaway (the
+# previous behaviour). The key is derived from the command name and
+# sanitised so it is safe to use as a filesystem path component.
+OBSIDIAN_APPKEY=$(printf '%s' "$1" | sed 's|.*/||; s/[^A-Za-z0-9._-]/_/g')
+export OBSIDIAN_APPKEY
 
 REAL_NPROC="$(nproc 2>/dev/null || echo 1)"
 if [ "$REAL_NPROC" -ge 2 ]; then
@@ -4889,10 +4919,25 @@ shift 1
 mount --make-rprivate / 2>/dev/null || true
 mount -t proc proc /proc
 mount -t tmpfs tmpfs /home
-mkdir -p "/home/$FAKE_USER/.cache/fontconfig"
-mkdir -p "/home/$FAKE_USER/.config"
 mkdir -p /home/.fake/sys_spoofs
 chmod 700 "/home/$FAKE_USER"
+
+# Persistent per-application home directory. By default the app keeps
+# its preferences, caches and config across launches; only the spoofed
+# identity (hostname, machine-id, ...) is regenerated each time. Set
+# OBSIDIAN_FRESH=1 for a throwaway launch.
+if [ -n "$OBSIDIAN_FRESH" ] && [ "$OBSIDIAN_FRESH" != "0" ]; then
+    mkdir -p "/home/$FAKE_USER"
+else
+    HOMESTORE="/opt/obsidian/var/homes/$OBSIDIAN_APPKEY"
+    mkdir -p "$HOMESTORE"
+    chmod 700 "$HOMESTORE"
+    chown "$REAL_UID" "$HOMESTORE" 2>/dev/null || true
+    mkdir -p "/home/$FAKE_USER"
+    mount --bind "$HOMESTORE" "/home/$FAKE_USER"
+fi
+mkdir -p "/home/$FAKE_USER/.cache/fontconfig"
+mkdir -p "/home/$FAKE_USER/.config"
 
 touch /home/.fake/empty
 printf "0-1\n" > /home/.fake/cpu_online

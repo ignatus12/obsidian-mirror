@@ -6,6 +6,24 @@ your own machine with the command named next to it.
 
 ---
 
+## Unreleased
+
+- **Network is allowed by default under the strict boundary.** A hardened
+  application (`OBSIDIAN_HARDEN=1`) previously could not open `AF_INET` /
+  `AF_INET6` sockets at all, so DNS and the web were dead. The boundary
+  now leaves the network layer open by default so a hardened app can
+  actually reach the internet; opt out per application with
+  `OBSIDIAN_DENY_NET=1` (or `opt.deny_net=1` in a profile).
+- **Per-application preferences persist by default.** The launcher no
+  longer wipes `/home` on every launch: each app keeps its preferences,
+  caches and config under `/opt/obsidian/var/homes/<app>` across runs.
+  Set `OBSIDIAN_FRESH=1` for the old throwaway behaviour.
+- **Maintainership testament added** to the README (see the document).
+- **Installer scope clarified.** The installer never configures
+  dnscrypt-proxy, unbound or nftables, and never writes
+  `/etc/resolv.conf`; a host DNS failure after reboot is outside its
+  responsibility.
+
 ## Strict boundary: correct denied-path message + wrapper launch support
 
 ### Fixed

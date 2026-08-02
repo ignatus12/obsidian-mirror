@@ -102,12 +102,13 @@ def main():
         '         "$FAKEROOT" "$FAKEROOT/fonts" "$FAKEROOT/proc" "$MANIFESTDIR"; do\n'
         "    mkdir -p \"$d\"\ndone\n",
         '         "$FAKEROOT" "$FAKEROOT/fonts" "$FAKEROOT/proc" "$MANIFESTDIR" \\\n'
-        '         "$VARDIR" "$LEARNDIR" "$PROFILEDIR"; do\n'
+        '         "$VARDIR" "$VARDIR/homes" "$LEARNDIR" "$PROFILEDIR"; do\n'
         "    mkdir -p \"$d\"\ndone\n"
         "# The learning log is written from inside the sandbox by whichever\n"
         "# unprivileged user is running an application through it, so it needs\n"
         "# the same sticky-writable treatment /tmp gets.\n"
-        'chmod 1777 "$LEARNDIR"\n',
+        'chmod 1777 "$LEARNDIR"\n'
+    'chmod 1777 "$VARDIR/homes"\n',
     )
 
     # ---------------------------------------------------------------
@@ -247,6 +248,7 @@ fi
 ''',
         '''    echo "  OBSIDIAN_ALLOW_SYSTEM_BUS=1     permit the D-Bus system bus"
     echo "  OBSIDIAN_VERBOSE=1              log blocked IPC connections"
+    echo "  OBSIDIAN_FRESH=1               throwaway launch (no saved preferences)"
     echo
     echo "Strict-boundary switches (only read when OBSIDIAN_HARDEN is set):"
     echo "  OBSIDIAN_HARDEN=1               default-deny every layer"
@@ -260,6 +262,7 @@ fi
     echo "  OBSIDIAN_ALLOW_NESTED_NS=1      let the app build namespaces"
     echo "  OBSIDIAN_HARDEN_PROFILE=<file>  use this allow-list"
     echo "  OBSIDIAN_HARDEN_FAIL_CLOSED=1   refuse to run if a layer fails"
+    echo "  OBSIDIAN_DENY_NET=1            block all network under hardening (default: allowed)"
     echo
     echo "Example: obsidian firefox"
 ''',

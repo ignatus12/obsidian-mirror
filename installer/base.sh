@@ -1815,6 +1815,16 @@ REAL_GID="$(id -g)"
 REAL_RUNTIME_DIR="${XDG_RUNTIME_DIR}"
 REAL_WAYLAND_SOCK="${WAYLAND_DISPLAY:-wayland-0}"
 
+# Per-application persistent home key. Each application's data
+# (preferences, caches, configuration) is stored under
+# /opt/obsidian/var/homes/<appkey> by default so it survives across
+# launches -- the application is not re-launched as if for the first
+# time on every run. OBSIDIAN_FRESH=1 makes a launch throwaway (the
+# previous behaviour). The key is derived from the command name and
+# sanitised so it is safe to use as a filesystem path component.
+OBSIDIAN_APPKEY=$(printf '%s' "$1" | sed 's|.*/||; s/[^A-Za-z0-9._-]/_/g')
+export OBSIDIAN_APPKEY
+
 REAL_NPROC="$(nproc 2>/dev/null || echo 1)"
 if [ "$REAL_NPROC" -ge 2 ]; then
     FAKE_CORE_COUNT=2
@@ -2004,10 +2014,25 @@ shift 1
 mount --make-rprivate / 2>/dev/null || true
 mount -t proc proc /proc
 mount -t tmpfs tmpfs /home
-mkdir -p "/home/$FAKE_USER/.cache/fontconfig"
-mkdir -p "/home/$FAKE_USER/.config"
 mkdir -p /home/.fake/sys_spoofs
 chmod 700 "/home/$FAKE_USER"
+
+# Persistent per-application home directory. By default the app keeps
+# its preferences, caches and config across launches; only the spoofed
+# identity (hostname, machine-id, ...) is regenerated each time. Set
+# OBSIDIAN_FRESH=1 for a throwaway launch.
+if [ -n "$OBSIDIAN_FRESH" ] && [ "$OBSIDIAN_FRESH" != "0" ]; then
+    mkdir -p "/home/$FAKE_USER"
+else
+    HOMESTORE="/opt/obsidian/var/homes/$OBSIDIAN_APPKEY"
+    mkdir -p "$HOMESTORE"
+    chmod 700 "$HOMESTORE"
+    chown "$REAL_UID" "$HOMESTORE" 2>/dev/null || true
+    mkdir -p "/home/$FAKE_USER"
+    mount --bind "$HOMESTORE" "/home/$FAKE_USER"
+fi
+mkdir -p "/home/$FAKE_USER/.cache/fontconfig"
+mkdir -p "/home/$FAKE_USER/.config"
 
 touch /home/.fake/empty
 printf "0-1\n" > /home/.fake/cpu_online

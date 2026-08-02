@@ -228,6 +228,7 @@ static int  cfg_verbose;
 static int  cfg_hard_fail;      /* abort if a layer cannot load */
 static int  cfg_net_all;        /* OBSIDIAN_ALLOW_NET=all       */
 static int  cfg_net_any;        /* any network grant at all     */
+static int  cfg_deny_net;       /* OBSIDIAN_DENY_NET / opt.deny_net */
 static int  cfg_scope_ipc = -1; /* -1 = auto                    */
 static int  cfg_memfd_deny;
 static int  cfg_nested_ns;      /* allow CLONE_NEW* / unshare   */
@@ -1169,6 +1170,7 @@ static void set_opt(const char *key, const char *val)
     else if (strcmp(key, "defaults") == 0)   cfg_defaults = on;
     else if (strcmp(key, "hard_fail") == 0)  cfg_hard_fail = on;
     else if (strcmp(key, "verbose") == 0)    cfg_verbose = on;
+    else if (strcmp(key, "deny_net") == 0)   cfg_deny_net = on;
 }
 
 /* One profile line, parsed in place. Kept separate so the file
@@ -1630,6 +1632,21 @@ int main(int argc, char **argv)
     add_list(getenv("OBSIDIAN_ALLOW_DEV"),       OB_DEV);
     add_list(getenv("OBSIDIAN_ALLOW_EXEC"),      OB_RX);
     add_net_grant(getenv("OBSIDIAN_ALLOW_NET"));
+
+    /* Network default under the strict boundary: ALLOWED.
+     * An application launched through obsidian is meant to be useful,
+     * and DNS, the web and mail all require AF_INET/AF_INET6. The
+     * boundary still closes filesystem, devices, memory, execution,
+     * IPC, capabilities and namespaces by default; only the network
+     * layer defaults open so a hardened app can actually reach the
+     * internet. Opt out per-application with OBSIDIAN_DENY_NET=1
+     * (or opt.deny_net=1 in a profile). */
+    if (getenv("OBSIDIAN_DENY_NET") || cfg_deny_net) {
+        cfg_net_all = 0;
+        cfg_net_any = 0;
+    } else if (!cfg_net_any && !getenv("OBSIDIAN_ALLOW_NET")) {
+        cfg_net_all = 1;
+    }
 
     v = getenv("OBSIDIAN_SCOPE_IPC");
     if (v && *v) cfg_scope_ipc = (*v == '1');

@@ -2025,11 +2025,22 @@ if [ -n "$OBSIDIAN_FRESH" ] && [ "$OBSIDIAN_FRESH" != "0" ]; then
     mkdir -p "/home/$FAKE_USER"
 else
     HOMESTORE="/opt/obsidian/var/homes/$OBSIDIAN_APPKEY"
-    mkdir -p "$HOMESTORE"
-    chmod 700 "$HOMESTORE"
-    chown "$REAL_UID" "$HOMESTORE" 2>/dev/null || true
-    mkdir -p "/home/$FAKE_USER"
-    mount --bind "$HOMESTORE" "/home/$FAKE_USER"
+    # Best-effort, never fatal. If the persistent store cannot be
+    # created (e.g. the launcher is run by a user that cannot write
+    # /opt/obsidian/var/homes) or the bind is refused by the kernel or
+    # filesystem, fall back to a throwaway tmpfs home so the launch
+    # still works. set -e is active in this script, so every step is
+    # guarded and a failure degrades to the original behaviour.
+    if mkdir -p "$HOMESTORE" 2>/dev/null; then
+        chmod 700 "$HOMESTORE" 2>/dev/null || true
+        chown "$REAL_UID" "$HOMESTORE" 2>/dev/null || true
+        mkdir -p "/home/$FAKE_USER"
+        mount --bind "$HOMESTORE" "/home/$FAKE_USER" 2>/dev/null \
+            || mount -o bind "$HOMESTORE" "/home/$FAKE_USER" 2>/dev/null \
+            || true
+    else
+        mkdir -p "/home/$FAKE_USER"
+    fi
 fi
 mkdir -p "/home/$FAKE_USER/.cache/fontconfig"
 mkdir -p "/home/$FAKE_USER/.config"

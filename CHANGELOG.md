@@ -8,6 +8,16 @@ your own machine with the command named next to it.
 
 ## Unreleased
 
+- **Self-test regression fixed.** The new per-app persistent home bind
+  (`/opt/obsidian/var/homes/<app>`) is now best-effort: if the store
+  cannot be created or bound, the launcher falls back to a throwaway tmpfs
+  home instead of aborting the whole launch. The previous behaviour broke
+  the installer self-test (argv integrity, exit-status, hostname spoof,
+  stdin passthrough all reported empty output / exit 1).
+- **README rewritten as a simple introductory presentation.** A
+  summary-up-front plus comparison and data tables, under 30 sections,
+  titled "Obsidian Mirror Project — A Real Universal Application-data
+  Privacy / Protection".
 - **Network is allowed by default under the strict boundary.** A hardened
   application (`OBSIDIAN_HARDEN=1`) previously could not open `AF_INET` /
   `AF_INET6` sockets at all, so DNS and the web were dead. The boundary

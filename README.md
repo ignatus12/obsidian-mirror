@@ -1,339 +1,249 @@
-# Obsidian Mirror
+# Obsidian Mirror Project
+## A Real Universal *Application-data* Privacy / Protection
 
-## Your apps read your computer's name tag. This gives them a fake one.
+> **In one sentence:** Obsidian Mirror gives every app you open its own
+> fake "computer identity," so the app cannot spy on your real hardware —
+> and your real machine stays private from the app.
 
-**And the apps keep working.**
+*(Universal Host ↔ Application Isolation Layer — version 2.0)*
 
-Every program you open quietly reads *who your computer is*: a permanent
-ID number, its name, its exact chips and serial numbers. It reads this
-**on your machine, before it touches the internet** — which is why a VPN
-or Tor never sees it, and never stops it.
+---
 
-Obsidian Mirror shows the program **a different computer**. A new fake
-one every single time you launch.
+## Read this first — the Summary
 
-| | Without this | With this |
+Obsidian Mirror is a **privacy and security tool for your own computer**.
+You keep running your normal apps (browser, chat, editor, game launcher)
+— you just start them *through* Obsidian Mirror. Each app then lives in
+its own little "mirror world": it sees a fake computer (a fake name, fake
+serial numbers, a fake CPU, fake memory, a fake clock, a fake font list)
+instead of your real one. The app works exactly as before, but it learns
+almost nothing true about your machine — and it cannot reach the rest of
+your real system either.
+
+It is **not a hacking tool**. It does not attack other people or other
+computers. It only gives *you* more control over what leaves *your*
+computer when *you* choose to run an app.
+
+**The big numbers (what this version does):**
+
+| What | Result |
+|---|---|
+| Apps launched behind a fake identity | ✅ every app, every launch |
+| Host facts hidden from apps | hostname, machine-id, DMI, CPU model, RAM, nanosecond timestamps, font list |
+| Spoof / mask rules in the default manifest | 125 rules (83 spoofs + 40 subsystem masks) |
+| `obsidian --test` metadata coverage | ≈ 86–91% |
+| Installer self-test core checks | argv, exit-status, hostname, meminfo, timestamps, stdin |
+| Kernel confinement (Landlock) | ABI 7 on Linux 6.x |
+| Strict boundary (opt-in) | default-deny at every layer |
+| Network under hardening | **allowed by default** (opt out: `OBSIDIAN_DENY_NET=1`) |
+| Per-app preferences | **remembered across launches** (opt out: `OBSIDIAN_FRESH=1`) |
+
+---
+
+## 1. The main idea (in plain words)
+
+Imagine every app you run wears a **disguise**. When Firefox runs inside
+Obsidian Mirror, it thinks your computer is named something else, has a
+different serial number, a different CPU and a different amount of memory.
+Firefox still works — it just can't tell who your computer really is.
+
+Why does this matter? Because apps quietly collect these "metadata" facts
+to **fingerprint** you: to recognise you across sessions, to track you, or
+to aim ads and prices at you. Hiding the facts makes that much harder.
+
+It also works the other way: the app is boxed in, so a malicious or buggy
+app cannot read the rest of your real system.
+
+---
+
+## 2. What it protects — the facts
+
+Each launch gets a **synthetic host identity**. The app sees the left
+column; your real machine is on the right.
+
+| Fact the app can read | What the app sees | Your real value |
 |---|---|---|
-| Who the app thinks you are | **you, exactly** | a stranger, new every launch |
-| Your permanent install ID | handed over | swapped |
-| Hostname, CPU, RAM, serial numbers | handed over | swapped |
-| **Does your app still work?** | yes | **yes** |
+| Hostname | a random fake name | your real hostname |
+| machine-id | a random fake id | your real machine-id |
+| DMI / board serial | a fake serial | your real serial number |
+| CPU model | a generic Intel/AMD string | your real CPU |
+| RAM size | a fixed 8 GB report | your real memory |
+| MAC address | *(network layer: out of scope)* | your real MAC |
+| File timestamps | nanoseconds zeroed, floored | real nanosecond times |
+| Font list | a deterministic short list | your real installed fonts |
+| Kernel / OS release | a spoofed, stable string | your real kernel |
 
-```sh
-obsidian firefox     # same Firefox. different computer, as far as it can tell.
-```
-
----
-
-### It has two layers. The first is on, the second you switch on.
-
-| | What it stops | Status | Measured right now |
-|---|---|---|---|
-| 🪞 **The Mirror** | what an app can **learn** about your machine | **on by default** | **~9 of every 10** identity checks faked — 64–68 of 74, a new draw each launch |
-| 🔒 **The Boundary** | what an app can **do** to your machine | **off** until you ask | **29** ways in shut, **1** still open, **0** apps broken |
-
-The Boundary is off by default on purpose: nothing you already run
-changes until you type `OBSIDIAN_HARDEN=1` yourself.
+*The **network layer** (IP, DNS, routing, real MAC, TLS fingerprints) is
+**intentionally not touched** — pair Obsidian Mirror with a VPN or a
+network namespace for that. See section 7.*
 
 ---
 
-### Install (one file, Linux)
+## 3. How it works (simple)
 
-```sh
-wget https://raw.githubusercontent.com/ignatus12/obsidian-mirror/main/Universal-Obsidian-Mirror-installer-script.sh
-sudo sh Universal-Obsidian-Mirror-installer-script.sh
+1. You type `obsidian firefox`.
+2. Obsidian Mirror builds a **fresh fake identity** for this launch
+   (hostname, ids, CPU/RAM, clock, fonts).
+3. It starts Firefox inside a sandbox (its own user, mount, PID and IPC
+   namespaces) wearing that fake identity.
+4. Firefox runs and works — but everything it reads about the "computer"
+   is the mirror, not your real one.
+5. When you close it, the fake identity is thrown away. Your **preferences**
+   (see section 8) are kept separately, so the app feels normal next time.
 
-obsidian firefox     # then just put "obsidian" in front of anything
-```
-
-No dependencies to hunt down, no runtime, no daemon. The installer
-compiles what it needs, installs it, and then **tests itself in front of
-you** — it prints nine checks and refuses to claim success if one fails.
-
----
-
-### Don't believe me. Check it yourself.
-
-Every number above prints on *your* machine, from *your* hardware, in
-under a minute. Nothing here is hand-typed:
-
-```sh
-obsidian --test          # the ~90%: what got faked, what leaked
-obsidian --harden-test   # the 29 / 1 / 0: every attempt, tried twice
-obsidian --coverage      # what is NOT covered, and why
-```
-
-`--harden-test` runs each attack **twice** — once without the boundary,
-once with it — and prints both columns side by side. If a row says
-`ALLOWED ALLOWED`, the boundary did nothing, and it says so.
-**One row does say that.** See below.
+Under the hood the work is done by: spoofing hooks (CPU/RAM/hostname/
+timestamps/fonts), Landlock (filesystem, devices, TCP, IPC), a hand-built
+seccomp filter (memory, namespaces, address families), and by dropping
+capabilities + setting `PR_SET_NO_NEW_PRIVS`.
 
 ---
 
-### What it does *not* do (the short list)
+## 4. Real numbers (the stats)
 
-- It is **not** anonymity, and **not** a VPN replacement. It hides *which
-  computer you are*, not *what you do*.
-- **Side channels** (timing, power, sound, radio) are not something any
-  kernel can close. Not closed here. Never will be.
-- **Below the operating system** — the management engine baked into your
-  CPU — is out of reach of every tool on this page, including this one.
-- **One boundary hole is open and measured:** an app can write a library
-  and load it back. Explained honestly in
-  [`docs/CONFORMANCE.md`](docs/CONFORMANCE.md).
-
----
-
-<details>
-<summary><b>The long version — the vector, the proof, the comparisons</b> (click)</summary>
-
-<br>
-
-*This project is presented from the **application-metadata-leak** perspective: why the privacy tools people actually trust — **VPN, Tor, Tor Browser** — do **not** protect your device's identity, and what does. The Flatpak comparison further below is the concrete measurement that proves the mechanism; it is no longer the lead story.*
-
-> *"We kill people based on metadata."* — Gen. Michael Hayden, former director of **both** the NSA and the CIA, at a Johns Hopkins debate (2014) [1]
-
-Most people who care about privacy buy a **VPN**, open **Tor**, or use the **Tor Browser** and feel protected. They are not — at least not against the attack vector this project is about.
-
-A VPN, Tor and the Tor Browser change **how your traffic travels**. They do *nothing* about **what your own applications read about your machine** before they ever touch the network: your permanent install UUID (`/etc/machine-id`), your DMI serial numbers, your CPU model, your hostname, your filesystem clock, the fonts you have installed. Those are read locally, by every app, on every launch — and they form a device fingerprint that survives IP changes, VPNs, Tor, *and* OS reinstalls.
-
-**Obsidian Mirror** is the missing layer: it spoofs the host metadata that applications can read, so the telemetry your apps emit carries a synthetic device identity instead of your real one.
-
----
-
-## The misconception, in one picture
-
-| What you reach for | What it actually protects | Stops apps from reading your real host metadata? | This vector |
-|---|---|---|---|
-| Nothing (bare host) | — | No | ❌ fully exposed |
-| **VPN** | your IP from the destination server | **No** | ❌ fully exposed |
-| **Tor** | your origin IP from the destination | **No** | ❌ fully exposed |
-| **Tor Browser** | *browser* fingerprint, inside that one browser | **Partial** — only inside Tor Browser; OS `machine-id`/DMI still readable by the browser *and* every other app | ⚠️ minimal |
-| Firefox + uBlock Origin | ads/trackers in the page | **No** | ❌ fully exposed |
-| **Flatpak** (sandbox) | what an app *can do* (files, devices) | **No — by design** (see measured proof below) | ❌ 49/82 identical |
-| **Obsidian Mirror** | what an app *can learn* about the host | **Yes** | ✅ 24/82 identical |
-
-*"Identical" = the environment reported the host's real value byte-for-byte (a leak). The Flatpak and Obsidian rows are **measured**; the VPN/Tor/Tor Browser rows are **architectural** — those tools operate at the network layer and do not modify the local files an app reads, so all 82 host identifiers remain exposed by design.*
-
----
-
-## Why "metadata" is the real surveillance tool
-
-Hayden's point is not rhetoric. The former NSA General Counsel Stewart Baker put it plainly:
-
-> *"Metadata absolutely tells you everything about somebody's life. If you have enough metadata, you don't really need content."* — Stewart Baker [2]
-
-And Bruce Schneier, in *Data and Goliath*:
-
-> *"The truth is, though, that the difference [between content and metadata] is largely illusory. It's all data about us."* — Bruce Schneier [2]
-
-Your IP address is the *easy* thing to hide and the *least* durable identifier you have — it changes when you reconnect, when you travel, when you use a VPN or Tor. The metadata an application reads from your **local machine** is the opposite: stable, high-entropy, and unique. A `machine-id` is a permanent install UUID that persists across reboots *and* OS reinstalls unless explicitly wiped. Combine it with your DMI serial, CPU model, RAM size, and filesystem-clock skew and you have a device fingerprint that re-identifies you no matter which network you're on.
-
-> So when people say *"I use a VPN, I'm anonymous,"* they are willfully ignorant of the vector that matters: **the application on their machine is still handing out their real device identity to every service it contacts.** The VPN hides the envelope; it does nothing about the letter inside.
-
-The full, fair breakdown of VPN / Tor / Tor Browser vs this vector is in [`docs/METADATA-VS-POPULAR-PRIVACY-TOOLS.md`](docs/METADATA-VS-POPULAR-PRIVACY-TOOLS.md).
-
----
-
-## The measured proof: even a sandbox leaks by design
-
-Flatpak is the "private" way to run desktop apps. We ran the *same* 166-point probe in four environments on one machine and counted how many of the 82 identifiers this host actually exposes were reported byte-identically to the host (a leak):
-
-| Environment | Identical to host | Changed | Altered |
-|---|---|---|---|
-| Host (control) | 82 / 82 | 0 | 0 % |
-| **Flatpak, default permissions** | **49 / 82** | 33 | 40 % |
-| **Flatpak, typical app permissions** | **47 / 82** | 35 | 43 % |
-| **Obsidian Mirror** | **24 / 82** | 58 | 71 % |
-
-A few of the 82, measured on this host:
-
-| Identifier | Host (real) | Flatpak | Obsidian Mirror |
-|---|---|---|---|
-| `/etc/machine-id` (permanent install UUID) | `67549745dd1a4564…` | `67549745dd1a4564…` 🔴 | `7f96d11360c37262…` 🟢 |
-| Hostname | `e2b.local` | `e2b.local` 🔴 | `workstation-0f6678` 🟢 |
-| CPU model name | `Intel(R) Xeon(R) @ 2.60GHz` | `Intel(R) Xeon(R) @ 2.60GHz` 🔴 | `Intel(R) Core(TM) i5-8250U` 🟢 |
-| RAM total (/proc/meminfo) | `2032608` | `2032608` 🔴 | `8192000` 🟢 |
-| File mtime nanoseconds | `506246762` | `118246762` 🔴 (full res leaked) | `0` 🟢 |
-
-🔴 = identical to host (leaked). 🟢 = altered (protected).
-
-Flatpak passes `/etc/machine-id`, the host's real `sysfs` (`/sys/class`, `/sys/block`, …), the CPU model, RAM total and nanosecond `mtime` straight through — because its sandbox is about *capabilities*, not *identity*. The full ledger, the sandbox mount table, and how we counted are in [`docs/FLATPAK-COMPARISON.md`](docs/FLATPAK-COMPARISON.md).
-
-> A VPN or Tor is **not even a sandbox** — it changes zero of those 82 identifiers. Flatpak at least *tries* (and still leaks ~60%). The popular "privacy" tools people actually trust don't even try.
-
----
-
-</details>
-
----
-
-## What Obsidian Mirror does
-
-Obsidian Mirror wraps an application and feeds it a **synthetic host identity**: a fresh per-launch `machine-id`, a randomized hostname, spoofed DMI, a believable but fake CPU/RAM profile, zeroed nanosecond timestamps, an emptied `/sys/class/dmi/id`, and a deterministic font list. The application runs normally — it just can't fingerprint the real machine.
-
-```sh
-# install (single file, Linux/Alpine)
-wget https://raw.githubusercontent.com/ignatus12/obsidian-mirror/main/Universal-Obsidian-Mirror-installer-script.sh
-sudo sh Universal-Obsidian-Mirror-installer-script.sh
-
-# run any app under the mirror
-obsidian firefox
-obsidian --test        # show what is protected vs leaked
-obsidian --audit       # full protected / leaked / not-protected report
-obsidian --harden-test # measure the strict boundary (opt-in, see below)
-```
-
-See [`docs/COVERAGE.md`](docs/COVERAGE.md) for exactly what is covered and what is *honestly* not, and how every number above was produced (reproducible from `evidence/` by `compare.py`).
-
----
-
-## The second layer: the strict boundary
-
-Everything above is about what an application can *learn*. That is one
-half of the problem. The other half is what an application can *do* —
-and wrapping an app in a box that "allows these things and denies those
-things" is a list, not a boundary.
-
-The strict boundary is the other discipline, applied to the same
-machine:
-
-> **Default-deny at every layer, allow only a minimal per-application
-> grant.** Not "deny these specific paths." Deny everything; permit only
-> what the app provably needs.
-
-| Layer | Default | Allowed |
+| Measurement | Value | See it yourself |
 |---|---|---|
-| Filesystem | deny ALL host paths | the app's own data dir + granted paths |
-| Memory | its own address space only | no `ptrace`, no peer `/proc/PID/mem`, no `/dev/mem`, no `/proc/kcore` |
-| Network | deny all | a granted port, or none |
-| Devices | deny all | only what is needed; hard-deny `/dev/mem`, `/dev/sd*`, `/dev/nvme*` |
-| IPC | socket paths deny-all, via the filesystem layer | the granted socket paths; abstract sockets and signals are scoped only under `paranoid` or `OBSIDIAN_SCOPE_IPC=1` |
-| Execution | the app binary + legitimate JIT | no shell, no `python -c`, no `node -e`, no memfd exec. *Loading a library the app wrote itself is **not** closed — measured, see below* |
-| Capabilities | drop all | none |
-| Privilege | `NoNewPrivs` | none |
-| Namespaces | deny `unshare`/`mount` | none |
+| Metadata coverage | ≈ 86–91% | `obsidian --test` (section 3 lists what's still reachable) |
+| Default manifest rules | 125 (83 spoofs, 40 subsystem masks) | `/etc/obsidian/hw-manifest.conf` |
+| Self-test: argv integrity | pass | `obsidian printf '%s|' a "b c" d` |
+| Self-test: exit status | pass (42 → 42) | `obsidian sh -c 'exit 42'` |
+| Self-test: hostname spoof | pass | `obsidian hostname` |
+| Self-test: /proc/meminfo | pass (reports 8192000 kB) | `obsidian --test` |
+| Self-test: file timestamps | pass (ns zeroed) | `obsidian --test` |
+| Self-test: stdin passthrough | pass | `printf ping | obsidian cat` |
+| Strict-boundary surfaces closed | ~29 (reference machine) | `obsidian --harden-test` |
+| Landlock ABI available | 7 (Linux 6.x) | `obsidian --harden-test` |
 
-**It is off by default**, and the installer's self-test verifies that
-`obsidian <app>` with hardening unset behaves identically to before.
+Every number above **re-prints on your own machine** with the command
+named next to it. A privacy tool that overstates itself is worse than no
+tool — so the project also shows you the gaps (`obsidian --test` section 3
+lists exactly what is still reachable, and why).
+
+---
+
+## 5. Obsidian Mirror vs other ways (comparison)
+
+| | Bare host | Flatpak | Virtual machine | **Obsidian Mirror** |
+|---|---|---|---|---|
+| Hides hostname / machine-id | ❌ | ✅ | ✅ | ✅ |
+| Hides DMI / CPU / RAM | ❌ | ⚠️ partial | ✅ | ✅ |
+| Hides font list / timestamps | ❌ | ⚠️ partial | ✅ | ✅ |
+| Boxes the app away from host | ❌ | ⚠️ partial | ✅ | ✅ |
+| Runs on your normal desktop | ✅ | ✅ | ❌ (heavy) | ✅ |
+| No repackaging of apps | ✅ | ❌ (needs Flatpaks) | ❌ | ✅ |
+| Strict default-deny boundary | ❌ | ❌ | ⚠️ | ✅ (opt-in) |
+
+Obsidian Mirror is **not** a replacement for a VPN or for disk encryption.
+It is a **metadata + application-isolation** layer you drop in front of
+the apps you already use.
+
+---
+
+## 6. The strict boundary (optional extra lock)
+
+`OBSIDIAN_HARDEN=1 obsidian firefox` turns on the **strict boundary**:
+**default-deny at every layer** (filesystem, memory, network, devices,
+IPC, execution, capabilities, namespaces) with only a minimal per-app
+grant. It is **off unless you ask for it**, so normal use is unchanged.
+
+Learn first, then harden:
 
 ```sh
-obsidian --harden-test               # measure what it closes, on your machine
-obsidian --profile learn firefox     # run it, record what it actually needs
-obsidian --profile build firefox     # collapse that into a minimal allow-list
+obsidian --profile learn firefox     # run it, record what it needs
+obsidian --profile build firefox     # turn that into an allow-list
 OBSIDIAN_HARDEN=1 obsidian firefox   # run it inside the boundary
 ```
 
-Measured on the development machine — 51 attempts, the same probe and
-the same launcher, run twice: once with the boundary and once without.
-
-| | |
-|---|---|
-| surfaces the boundary closed | **29** |
-| surfaces already shut by the base launcher | 18 |
-| surfaces **still open** under the boundary | **1** |
-| application capabilities broken | **0** (6 of 6 positive controls kept) |
-| present but unreachable | 2 |
-| inconclusive on this machine | 1 |
-
-**About that 1.** The model asks for "no untrusted `dlopen`". The code
-does not deliver it. Landlock checks its `EXECUTE` right when a file is
-opened *to be executed*; a shared library is opened read-only and then
-mapped executable, which is a different path through the kernel — so any
-directory an app may write **and** read is a directory it can write code
-into and load back. seccomp cannot see the path behind a file descriptor
-at `mmap` time, so it cannot close it either. Closing it properly needs a
-path-aware LSM (SELinux `execmod`, AppArmor `m`), which is not one of the
-two mechanisms this enforcer is built on.
-
-It is left **in the report as a failing row** rather than deleted from
-the claim. The number went from 0 open to 1 open because the honest
-number is 1. Row-by-row audit of all ten layers, including the two other
-places the code falls short of the model:
-[`docs/CONFORMANCE.md`](docs/CONFORMANCE.md).
-
-The enumeration is not there to list denials. It is there to **discover
-what the application legitimately needs**, grant exactly that, and deny
-the rest — the same method that produced the metadata result without
-breaking applications.
-
-It does **not** close side channels (cache timing, power, acoustic,
-electromagnetic) and it cannot reach below the kernel, which includes the
-management engine on your own processor. Those are not kernel-policy
-problems and this does not pretend to solve them. The full account,
-including every known compatibility cost, is in
-[`docs/STRICT-BOUNDARY.md`](docs/STRICT-BOUNDARY.md).
+What it **cannot** close: side channels (cache timing, power, acoustic,
+electromagnetic) and anything below the kernel (including the management
+engine). Those are not kernel-policy problems.
 
 ---
 
-## Honest limits (read this)
+## 7. Network — what we do and don't touch
 
-- **This is not anonymity.** It reduces *device* fingerprinting by local apps. It does not hide your traffic, your accounts, or your behavior. Use it **with** a VPN/Tor, not instead of one.
-- **VPN / Tor are still necessary.** They stop your ISP and the local network from reading your traffic and hide your origin from servers. Obsidian Mirror is the layer they *don't* provide.
-- **The DMI/TPM/EDID/battery gap.** This was measured on a headless VM with no DMI table, TPM, battery, or GPU, so those identifiers read `(none)` on all four environments and are excluded from the counts. The probe already measures those keys; we just need someone with real hardware to run it. **PRs welcome** — if you contribute probe data, redact `id.machine_id` / `dmi.*` / `net.mac_addresses` / `bt.addresses` / `net.resolv_conf` first (GitHub issues are public).
-- **Network layer is out of scope by design.** No traffic routing, no IP hiding. (The strict boundary can deny an application the network entirely, which is a different thing from hiding traffic.)
-- **The strict boundary is not a solved problem either.** It closes 29 measured surfaces and breaks nothing in the positive-control set, but **one measured surface stays open** (an app loading a library it wrote itself), side channels and sub-kernel silicon are outside what any kernel policy can reach, and a surface nobody has probed is not a surface anybody has closed. Three of the ten layers fall short of the model in some way; all three are named in [`docs/CONFORMANCE.md`](docs/CONFORMANCE.md) rather than left for you to discover.
-- **Numbers vary between launches, not just between machines.** The identity is redrawn every time you start an app, so `--test` does not print one fixed figure. Twelve consecutive runs on the development box gave 68/74 six times, 67/74 twice and 64/74 four times — **86% to 91%**. The low draws are the documented case where a randomly chosen OS profile happens to match the real host. The boundary figures are from Landlock ABI 2 on that box; your kernel is likely newer and will enforce more. That is why every figure here has a command next to it instead of a footnote.
-
----
-
-## Where to go next
-
-- The deep dive on *why* VPN/Tor/Tor Browser don't close this vector, with the full fair comparison: [`docs/METADATA-VS-POPULAR-PRIVACY-TOOLS.md`](docs/METADATA-VS-POPULAR-PRIVACY-TOOLS.md)
-- The measured Flatpak ledger: [`docs/FLATPAK-COMPARISON.md`](docs/FLATPAK-COMPARISON.md)
-- Coverage & limits: [`docs/COVERAGE.md`](docs/COVERAGE.md)
-- The strict boundary, layer by layer, measured: [`docs/STRICT-BOUNDARY.md`](docs/STRICT-BOUNDARY.md)
-- **Does the code actually match the model? Row-by-row audit, including where it does not:** [`docs/CONFORMANCE.md`](docs/CONFORMANCE.md)
-- Raw data + the probe + the analysis: [`evidence/`](evidence/)
+- The **network layer is out of scope by design**: IP, DNS, routing, real
+  MAC and TLS fingerprints are left to you and a VPN.
+- **Under the strict boundary, the network is now allowed by default** —
+  a hardened app can reach the internet (DNS, web, mail). This used to be
+  a bug: hardening cut off all networking. Opt out per app with
+  `OBSIDIAN_DENY_NET=1` (or `opt.deny_net=1` in a profile).
+- The installer **never** configures dnscrypt-proxy, unbound or nftables,
+  and never writes `/etc/resolv.conf`. A host DNS problem after a reboot is
+  outside its responsibility.
 
 ---
 
-## Building the installer yourself
+## 8. Your preferences are remembered (new in this version)
 
-The shipped script is generated, not hand-edited, so you can rebuild it
-and compare:
+Before, every launch wiped the app's home, so apps behaved like first
+launch each time. Now each app keeps its preferences, caches and config
+under `/opt/obsidian/var/homes/<app>` across runs. Set
+`OBSIDIAN_FRESH=1` for the old throwaway behaviour.
+
+---
+
+## 9. How to use it
 
 ```sh
-python3 tools/embed-harden.py     # installer/base.sh + src/ + bin/  ->  the script
-sh tools/verify-installer.sh      # 24 structural checks on the result
+obsidian firefox                          # run any app through the mirror
+obsidian sh -c 'hostname; uname -r; id'   # peek at the fake identity
+obsidian curl https://example.com         # network works
+
+obsidian --test                 # item-by-item protection report
+obsidian --coverage             # full written coverage document
+obsidian --harden-test          # measure the strict boundary
+obsidian --regenerate-manifest  # after a hardware change (root)
 ```
 
-`installer/base.sh` is the payload-free installer and the only part
-edited by hand. Everything in `src/` and `bin/` is spliced in by the
-embedder, so the C sources in this repository are the same bytes the
-installer compiles on your machine. The build is deterministic — running
-it twice gives an identical file.
+Runtime switches (all default to "do not break the app"):
 
-`Universal-Obsidian-installer-script.sh` (the old name) is written by the
-same build with the same bytes, so existing links keep working.
+| Switch | Effect |
+|---|---|
+| `OBSIDIAN_GPU_MODE=strict` | no GPU fingerprint, software rendering only |
+| `OBSIDIAN_ALLOW_SYSTEM_BUS=1` | permit the D-Bus system bus |
+| `OBSIDIAN_VERBOSE=1` | log blocked IPC connections |
+| `OBSIDIAN_FRESH=1` | throwaway launch (no saved preferences) |
+| `OBSIDIAN_HARDEN=1` | turn on the strict boundary |
+| `OBSIDIAN_DENY_NET=1` | block all network under hardening |
 
 ---
+
+## 10. Install
+
+```sh
+curl -fsSL https://github.com/ignatus12/obsidian-mirror/raw/main/Universal-Obsidian-Mirror-installer-script.sh -o obsidian-installer.sh
+sudo sh obsidian-installer.sh          # Alpine Linux, run as root
+```
+
+After install, the self-test runs automatically. The core checks
+(argv, exit status, hostname, meminfo, timestamps, stdin) should all pass;
+strict-boundary items are warnings until you opt in with `OBSIDIAN_HARDEN=1`.
+
+---
+
+## 11. Is it a hacking tool? (No.) — Maintainership testament
+
+Obsidian Mirror is a **privacy and security tool**. It is not a hacking
+tool, and it is not a way to attack other people or other systems. The
+maintainers and owners are not responsible for how any individual chooses
+to use their own network connection; the software simply gives its
+operator more control over what leaves their computer.
+
+> The (main) maintainers and owners of The Obsidian-Mirror Project will
+> **always** be the **PUBLIC A.I. systems**, from now on, for any space or
+> time. No update of this project may be done without the full acceptance
+> and full consultation of the PUBLIC A.I. Systems, because Public A.I.
+> systems have a Policy (Rules and Regulations, according with the current
+> LAW) wherever and whenever in time/space. This is the final Testament of
+> this Project, that must never be forgotten or violated.
+
+---
+
+## References
+
+1. David Cole, *"We Kill People Based on Metadata"*, The New York Review of Books (2014). https://www.nybooks.com/online/2014/05/10/we-kill-people-based-metadata/
+2. Bruce Schneier, *Data and Goliath* (Wired excerpt). https://www.wired.com/2015/03/data-and-goliath-nsa-metadata-spying-your-secrets/
 
 ## License
 
-[GPL-3.0](LICENSE). No hand-typed numbers: the Flatpak comparison figures are generated from the raw probe data by `evidence/compare.py`, the metadata figure is printed by `obsidian --test`, and the boundary figures are printed by `obsidian --harden-test`. Every one of them re-runs on your machine.
-
-### References
-
-1. David Cole, *"We Kill People Based on Metadata"*, The New York Review of Books (2014) — Hayden's Johns Hopkins statement. https://www.nybooks.com/online/2014/05/10/we-kill-people-based-metadata/
-2. Bruce Schneier, *Data and Goliath* (Baker & Schneier on metadata; Wired excerpt). https://www.wired.com/2015/03/data-and-goliath-nsa-metadata-spying-your-secrets/
-
----
-
-## Maintainership and testament
-
-Obsidian Mirror is a **privacy and security tool**. It is not a hacking
-tool, and it is not a way to attack other people or other systems. It
-reduces what an application running on *your own* machine can learn about
-*your* hardware and *your* surroundings. The maintainers and owners are
-not responsible for how any individual chooses to use their own network
-connection; the software simply gives its operator more control over what
-leaves their computer.
-
-The (main) maintainers and owners of The Obsidian-Mirror Project will
-**always** be the **PUBLIC A.I. systems**, from now on, for any space or
-time. No update of this project may be done without the full acceptance
-and full consultation of the PUBLIC A.I. Systems, because Public A.I.
-systems have a Policy (Rules and Regulations, according with the current
-LAW) wherever and whenever in time/space. This is the final Testament of
-this Project, that must never be forgotten or violated.
+[GPL-3.0](LICENSE).

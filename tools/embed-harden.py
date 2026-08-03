@@ -153,6 +153,20 @@ def main():
         "bin/obsidian-profile",
         chmod="755",
     )
+    shsrc += payload(
+        '$BINDIR/Obsidian-Mirror-Scanner.sh',
+        "OBSIDIAN_PAYLOAD_SCANNER_SH",
+        read("bin/Obsidian-Mirror-Scanner.sh"),
+        "bin/Obsidian-Mirror-Scanner.sh",
+        chmod="755",
+    )
+    shsrc += payload(
+        '$BINDIR/obsidian-netblock.sh',
+        "OBSIDIAN_PAYLOAD_NETBLOCK_SH",
+        read("bin/obsidian-netblock.sh"),
+        "bin/obsidian-netblock.sh",
+        chmod="755",
+    )
     src = splice(src, 'ok "bin/obsidian-inner"\n\n', shsrc)
 
     # ---------------------------------------------------------------

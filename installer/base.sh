@@ -1825,6 +1825,15 @@ REAL_WAYLAND_SOCK="${WAYLAND_DISPLAY:-wayland-0}"
 OBSIDIAN_APPKEY=$(printf '%s' "$1" | sed 's|.*/||; s/[^A-Za-z0-9._-]/_/g')
 export OBSIDIAN_APPKEY
 
+# HARDEN_OBSIDIAN=2: next-level hardening. Route the launch through the
+# per-app network namespace + dynamic deny-list blocker instead of the
+# normal path. The blocker still runs the app under HARDEN_OBSIDIAN=1
+# inside its own netns, logs its traffic, and denies everything it did not
+# prove it needs.
+if [ "${OBSIDIAN_HARDEN:-}" = "2" ]; then
+    exec "$OBSIDIAN_DIR/bin/obsidian-netblock.sh" run "${OBSIDIAN_APPKEY:-app}" -- "$@"
+fi
+
 REAL_NPROC="$(nproc 2>/dev/null || echo 1)"
 if [ "$REAL_NPROC" -ge 2 ]; then
     FAKE_CORE_COUNT=2

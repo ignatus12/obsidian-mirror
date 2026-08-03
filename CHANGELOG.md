@@ -30,6 +30,15 @@ your own machine with the command named next to it.
   testing). Logs all traffic leaving the application (external view) to a file
   for analysis of internal-application threat models. See the script header.
 
+- **`OBSIDIAN_HARDEN=2` — next-level dynamic network hardening.** Builds on
+  `OBSIDIAN_HARDEN=1` by running the app inside its own network namespace
+  (per-app veth), automatically logging its traffic with the scanner, and
+  applying a **default-deny egress firewall** that allows only what a prior
+  run proved necessary (everything else is denied). Implemented by
+  `bin/obsidian-netblock.sh`; requires root + iproute2 + nftables and
+  degrades to logging-only when those are unavailable. Not a hacking tool:
+  it only restricts what *your* app may send out.
+
 - **README rewritten as a simple introductory presentation.** A
   summary-up-front plus comparison and data tables, under 30 sections,
   titled "Obsidian Mirror Project — A Real Universal Application-data

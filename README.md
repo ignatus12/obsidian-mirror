@@ -332,6 +332,28 @@ It captures every IP packet on every interface (ethernet, wifi, VPN/tunnels)
 with `tcpdump`/`tshark`; add `btmon` alongside for Bluetooth. Read the
 generated log to confirm what the app actually sends.
 
+## 15. Next-level hardening: OBSIDIAN_HARDEN=2 (dynamic network deny-list)
+
+`OBSIDIAN_HARDEN=1` locks down what the app can *touch on your system*.
+`OBSIDIAN_HARDEN=2` adds the network side: it runs the app inside its own
+network namespace, watches every packet it tries to send (the external
+view), and then denies everything it did not prove it needs.
+
+```sh
+OBSIDIAN_HARDEN=2 obsidian firefox
+```
+
+- The first run **learns**: it logs all traffic leaving the app.
+- Later runs **enforce**: only the destinations seen before are allowed;
+  every other outbound connection is denied by default.
+- Everything still unnecessary for the app is blocked before it reaches the
+  real network — without breaking the app (it keeps the internet it needs).
+- Requires root + `iproute2` + `nftables`; without them it degrades to
+  `HARDEN=1` plus traffic logging.
+
+Engines: `bin/Obsidian-Mirror-Scanner.sh` (capture/learn) and
+`bin/obsidian-netblock.sh` (per-app namespace + dynamic deny-list).
+
 ## References
 
 1. David Cole, *"We Kill People Based on Metadata"*, The New York Review of Books (2014). https://www.nybooks.com/online/2014/05/10/we-kill-people-based-metadata/

@@ -18,6 +18,18 @@ your own machine with the command named next to it.
   `chmod: cannot access '/home/user'`). The `chmod` now runs after the
   directory is created; the store bind is also best-effort so it can never
   abort a launch.
+
+- **Non-root users can now run the audits.** The launcher's `chmod` on the
+  fake home directory is now non-fatal. Previously, when a normal (non-root)
+  user ran `obsidian --test` / `obsidian --harden-test`, that `chmod` failed
+  with EPERM inside the user namespace and `set -e` aborted the launch, so the
+  probe produced no output. (The hardware manifest at /etc/obsidian is already
+  world-readable, so the blocker was the home-dir chmod, not the manifest.)
+
+- **New analysis tool: `bin/Obsidian-Mirror-Scanner.sh`** (third-phase,
+  testing). Logs all traffic leaving the application (external view) to a file
+  for analysis of internal-application threat models. See the script header.
+
 - **README rewritten as a simple introductory presentation.** A
   summary-up-front plus comparison and data tables, under 30 sections,
   titled "Obsidian Mirror Project — A Real Universal Application-data

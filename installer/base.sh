@@ -2043,7 +2043,7 @@ else
         mkdir -p "/home/$FAKE_USER"
     fi
 fi
-chmod 700 "/home/$FAKE_USER"
+chmod 700 "/home/$FAKE_USER" 2>/dev/null || true
 mkdir -p "/home/$FAKE_USER/.cache/fontconfig"
 mkdir -p "/home/$FAKE_USER/.config"
 

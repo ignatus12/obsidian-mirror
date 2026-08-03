@@ -316,6 +316,22 @@ operator more control over what leaves their computer.
 
 ---
 
+## 14. Obsidian Mirror Scanner (analysis tool)
+
+For the next phase of analysis, `bin/Obsidian-Mirror-Scanner.sh` logs **all
+traffic leaving the application** (the external view) to a file, so you can
+see what an app tries to transmit. This is the "external super-blocker"
+vantage point: watch first, then block by destination.
+
+```sh
+Obsidian-Mirror-Scanner.sh -l firefox.log -d 120 -- firefox
+Obsidian-Mirror-Scanner.sh -n -- chromium     # run the app via obsidian
+```
+
+It captures every IP packet on every interface (ethernet, wifi, VPN/tunnels)
+with `tcpdump`/`tshark`; add `btmon` alongside for Bluetooth. Read the
+generated log to confirm what the app actually sends.
+
 ## References
 
 1. David Cole, *"We Kill People Based on Metadata"*, The New York Review of Books (2014). https://www.nybooks.com/online/2014/05/10/we-kill-people-based-metadata/

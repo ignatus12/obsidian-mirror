@@ -6280,7 +6280,21 @@ build_rules() {
             fi
         done
         # DNS is usually needed; allow common resolvers generically
-        echo "        # everything else is denied by policy drop"
+        echo "        # everything else is denied by policy drop (egress)"
+        echo "    }"
+        echo "    chain ingress {"
+        echo "        type filter hook input priority 0; policy drop;"
+        echo "        iifname \"lo\" accept"
+        echo "        ct state established,related accept"
+        Obsidian-Mirror-Scanner.sh learn -l "$LOG" 2>/dev/null | while read -r dst port proto; do
+            [ -z "$dst" ] && continue
+            if [ "$proto" = "icmp" ] || [ "$port" = "*" ]; then
+                echo "        ip saddr $dst accept"
+            else
+                echo "        ip saddr $dst $proto sport $port accept"
+            fi
+        done
+        echo "        # everything else is denied by policy drop (ingress)"
         echo "    }"
         echo "}"
     } > "$OUT"
@@ -6314,6 +6328,14 @@ run_app() {
         return 0
     fi
     NS="obs-$KEY"; VH="veth-$KEY"
+
+    # v3.2: hard-block Bluetooth (and WiFi if requested) for the whole host
+    # during a hardened launch. The app already has no bt/wifi interface
+    # inside its netns, this just guarantees 100% live blocking both ways.
+    if command -v rfkill >/dev/null 2>&1; then
+        rfkill block bluetooth 2>/dev/null && warn "Bluetooth hard-blocked for this launch"
+        [ "${OBSIDIAN_BLOCK_WIFI:-0}" = "1" ] && rfkill block wifi 2>/dev/null && warn "WiFi hard-blocked for this launch"
+    fi
 
     # start capture on the host-side veth (this app's traffic only)
     tcpdump -n -tttt -s 0 -i "$VH" "not (host 127.0.0.1 or host ::1)" -w "$LOG" >/dev/null 2>&1 &

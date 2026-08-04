@@ -39,6 +39,15 @@ your own machine with the command named next to it.
   degrades to logging-only when those are unavailable. Not a hacking tool:
   it only restricts what *your* app may send out.
 
+- **v3.2 — internal-application threat model (bidirectional + RF).**
+  `OBSIDIAN_HARDEN=2` now applies a **default-deny firewall on BOTH
+  directions** (egress and ingress) from a learned allow-list, so the app
+  can only talk to endpoints it previously proved necessary. Bluetooth is
+  hard-blocked for the launch (`rfkill block bluetooth`; `OBSIDIAN_BLOCK_WIFI=1`
+  also blocks WiFi). Documented as the v3.2 development phase; the installer
+  is published as `Universal-Obsidian-Mirror-installer-script_v3_2.sh`
+  alongside the historical `..._v2_0.sh`.
+
 - **README rewritten as a simple introductory presentation.** A
   summary-up-front plus comparison and data tables, under 30 sections,
   titled "Obsidian Mirror Project — A Real Universal Application-data

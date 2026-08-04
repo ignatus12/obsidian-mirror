@@ -24,6 +24,14 @@ It is **not a hacking tool**. It does not attack other people or other
 computers. It only gives *you* more control over what leaves *your*
 computer when *you* choose to run an app.
 
+**Why metadata matters — the "super-cookie":** imagine all your hardware
+metadata — the machine ID, DMI / board serial, CPU model, RAM size, MAC
+address, kernel — as one giant **super-cookie**. Unlike a browser cookie you
+can delete, this one follows you everywhere and you can never get rid of it.
+No VPN, no Tor, no Tor Browser hides it: any site or service can read it and
+recognise you across sessions, installs and networks, without your consent.
+Obsidian Mirror is what finally makes that super-cookie unreadable.
+
 **There are TWO protection layers. This is the most important thing to
 understand:**
 
@@ -51,6 +59,17 @@ understand:**
 | Per-app preferences | **remembered across launches** (opt out: `OBSIDIAN_FRESH=1`) |
 
 ---
+
+## Development phases (this release is v3.2)
+
+- **v1.0 — Application metadata protection.** Hides hostname, ids, CPU/RAM,
+  clock and fonts from the app (Layer 1, active by default).
+- **v2.0 — Hardware isolation.** Default-deny what the app may touch on your
+  system: filesystem, memory, devices, IPC, execution, capabilities,
+  namespaces (`OBSIDIAN_HARDEN=1`, Layer 2).
+- **v3.2 — Internal-application threat model (this release).** Watches and
+  blocks what the app tries to send *and* receive on the network, both ways,
+  and hard-blocks Bluetooth and WiFi (`OBSIDIAN_HARDEN=2`). See section 15.
 
 ## 1. The main idea (in plain words)
 
@@ -332,27 +351,39 @@ It captures every IP packet on every interface (ethernet, wifi, VPN/tunnels)
 with `tcpdump`/`tshark`; add `btmon` alongside for Bluetooth. Read the
 generated log to confirm what the app actually sends.
 
-## 15. Next-level hardening: OBSIDIAN_HARDEN=2 (dynamic network deny-list)
+## 15. Next-level hardening: OBSIDIAN_HARDEN=2 (v3.2 dynamic network deny-list)
 
 `OBSIDIAN_HARDEN=1` locks down what the app can *touch on your system*.
-`OBSIDIAN_HARDEN=2` adds the network side: it runs the app inside its own
-network namespace, watches every packet it tries to send (the external
-view), and then denies everything it did not prove it needs.
+`OBSIDIAN_HARDEN=2` (the v3.2 phase) adds the network side and treats the
+app's traffic as a **live external scan**:
+
+- The app runs inside its **own network namespace** (a dedicated veth), so
+  every packet it sends **and** receives is cleanly visible.
+- The **Outbound + Inbound scanner** logs all traffic leaving and entering
+  the app (all ports, all protocols, ethernet / wifi / Bluetooth).
+- A **default-deny** egress *and* ingress firewall allows only what a prior
+  run proved necessary — the SCAN -> DETECT -> KILL loop: anything not on the
+  learned allow-list is dropped before it reaches (or leaves) the real network.
+  A red flag on either side blocks both directions at once.
+- **Bluetooth and WiFi are hard-blocked** for the duration of the launch
+  (`rfkill block bluetooth`; set `OBSIDIAN_BLOCK_WIFI=1` to also block WiFi),
+  so the app cannot use them in any way, regardless of any prior setting.
 
 ```sh
-OBSIDIAN_HARDEN=2 obsidian firefox
+OBSIDIAN_HARDEN=2 obsidian firefox            # learn, then enforce
+OBSIDIAN_BLOCK_WIFI=1 OBSIDIAN_HARDEN=2 obsidian firefox
 ```
 
-- The first run **learns**: it logs all traffic leaving the app.
-- Later runs **enforce**: only the destinations seen before are allowed;
-  every other outbound connection is denied by default.
-- Everything still unnecessary for the app is blocked before it reaches the
-  real network — without breaking the app (it keeps the internet it needs).
+- The first run **learns**; later runs **enforce** (only learned endpoints
+  allowed, everything else denied both ways) — without breaking the app.
 - Requires root + `iproute2` + `nftables`; without them it degrades to
   `HARDEN=1` plus traffic logging.
 
-Engines: `bin/Obsidian-Mirror-Scanner.sh` (capture/learn) and
-`bin/obsidian-netblock.sh` (per-app namespace + dynamic deny-list).
+Engines: `bin/Obsidian-Mirror-Scanner.sh` (capture/learn, with `btmon` for
+Bluetooth) and `bin/obsidian-netblock.sh` (per-app namespace + dynamic
+bidirectional deny-list). This is the v3.2 internal-application threat-model
+layer; it is **not** a hacking tool — it only restricts what *your own* app
+may send to or receive from the network.
 
 ## References
 

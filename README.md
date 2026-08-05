@@ -1,36 +1,34 @@
-# Obsidian Mirror Project
-## A Real Universal *Application-data* Privacy / Protection
+# The Obsidian Mirror Project
+## A Real Universal Application-Data Privacy / Protection
 
-> **In one sentence:** Obsidian Mirror gives every app you open its own
-> fake "computer identity," so the app cannot spy on your real hardware —
-> and your real machine stays private from the app.
+> One sentence: Obsidian Mirror is a **privacy and security tool for your own
+> computer** that runs any app you choose inside a wrapper that hides your
+> hardware identity, boxes the app away from your real system, and filters what
+> it tries to send or receive on the network.
 
-*(Universal Host ↔ Application Isolation Layer — version 2.0)*
+*(The "Universal Host ↔ Application Isolation Layer" — current development
+phase **v3.4**.)*
 
 ---
 
 ## Read this first — the Summary
 
-Obsidian Mirror is a **privacy and security tool for your own computer**.
-You keep running your normal apps (browser, chat, editor, game launcher)
-— you just start them *through* Obsidian Mirror. Each app then lives in
-its own little "mirror world": it sees a fake computer (a fake name, fake
-serial numbers, a fake CPU, fake memory, a fake clock, a fake font list)
-instead of your real one. The app works exactly as before, but it learns
-almost nothing true about your machine — and it cannot reach the rest of
-your real system either.
+Obsidian Mirror is a **privacy and security tool for your own computer**. You
+point it at an app you already trust enough to run, and it changes what that
+app can see and touch — without modifying the app.
 
 It is **not a hacking tool**. It does not attack other people or other
-computers. It only gives *you* more control over what leaves *your*
-computer when *you* choose to run an app.
+computers. It only gives *you* more control over what leaves *your* computer
+when *you* choose to run an app.
 
 **Why metadata matters — the "super-cookie":** imagine all your hardware
 metadata — the machine ID, DMI / board serial, CPU model, RAM size, MAC
 address, kernel — as one giant **super-cookie**. Unlike a browser cookie you
 can delete, this one follows you everywhere and you can never get rid of it.
-No VPN, no Tor, no Tor Browser hides it: any site or service can read it and
-recognise you across sessions, installs and networks, without your consent.
-Obsidian Mirror is what finally makes that super-cookie unreadable.
+No VPN, no Tor, no Tor Browser, no operating-system change hides it: any site
+or service can read it and recognise you across sessions, installs and
+networks, without your consent. Obsidian Mirror is what finally makes that
+super-cookie unreadable.
 
 Three layers, three threats it closes:
 
@@ -38,38 +36,23 @@ Three layers, three threats it closes:
   tracking token. `obsidian <app>` hides it.
 - **Layer 2 — the host as an open book.** Without restriction, a malicious app
   could read your logs, memory, kernel and disks by default. Layer 2
-  (`HARDEN=1`) default-denies all of that.
+  (`OBSIDIAN_HARDEN=1`) default-denies all of that.
 - **Layer 3 — the constant invisible traffic.** Thousands of unwanted,
   privacy-violating packets enter and leave apps every moment, without your
-  consent. Layer 3 (`HARDEN=2`) logs, scans and kills that traffic before it
-  crosses the network boundary — with WiFi and Bluetooth hard-blocked.
+  consent. Layer 3 (`OBSIDIAN_HARDEN=2`) logs, scans and kills that traffic
+  before it crosses the network boundary — with WiFi and Bluetooth
+  hard-blocked.
 
-**There are THREE protection layers. This is the most important thing to
-understand (this release is v3.4):**
-
-| Layer | Name | What it protects | ON by default? |
-|---|---|---|---|
-| **Layer 1** | Application-metadata protection | hides hostname, ids, CPU/RAM, clock, fonts from the app | ✅ **YES** — just run `obsidian <app>` |
-| **Layer 2** | Hardware boundary (strict) | default-deny the app from your filesystem, memory, network, devices, IPC, execution, capabilities, namespaces | ❌ **NO** — needs `OBSIDIAN_HARDEN=1` (learn first: `obsidian --profile learn/build <app>`) |
-| **Layer 3** | Application internal threat-model (strict) | inbound/outbound network traffic: LOG→SCAN→(red-flag:KILL) filters malicious / harmful / privacy-violating traffic before it enters or leaves the app; WiFi/Bluetooth DEFAULT DENY, bidirectional live block | ❌ **NO** — needs `OBSIDIAN_HARDEN=2 obsidian <app>` |
-
-> ⚠️ **If you run `obsidian <application>` normally, only Layer 1 is active.**
-> Layer 2 (hardware boundary) needs `OBSIDIAN_HARDEN=1`; Layer 3 (the
-> internal threat-model network block) needs `OBSIDIAN_HARDEN=2`. Each layer
-> you add tightens the isolation — see sections 8 and 15.
-
-**The big numbers (what this version does):**
+**What you get, in numbers (this version):**
 
 | What | Result |
 |---|---|
-| Apps launched behind a fake identity (Layer 1) | ✅ every app, every launch |
-| Host facts hidden from apps | hostname, machine-id, DMI, CPU model, RAM, nanosecond timestamps, font list |
-| Spoof / mask rules in the default manifest | 125 rules (83 spoofs + 40 subsystem masks) |
-| `obsidian --test` metadata coverage (Layer 1) | ≈ 86–91% |
-| Installer self-test core checks | argv, exit-status, hostname, meminfo, timestamps, stdin |
-| Hardware boundary (Layer 2, opt-in) | default-deny at every layer |
-| Network under hardening | **allowed by default** (opt out: `OBSIDIAN_DENY_NET=1`) |
-| Per-app preferences | **remembered across launches** (opt out: `OBSIDIAN_FRESH=1`) |
+| Host identity (hostname, ids, CPU, RAM, clock, fonts) | **hidden** from the app |
+| Filesystem / memory / devices / IPC | **default-deny** under `OBSIDIAN_HARDEN=1` |
+| Network egress + ingress | **default-deny, learned allow-list** under `OBSIDIAN_HARDEN=2` |
+| Spoof/mask rules | **125** (83 identity spoofs + 40 subsystem masks) |
+| Measured metadata coverage | **≈ 86–91%** |
+| Per-app preferences | **remembered** across launches |
 
 ---
 
@@ -80,23 +63,25 @@ understand (this release is v3.4):**
 - **v2.0 — Hardware isolation.** Default-deny what the app may touch on your
   system: filesystem, memory, devices, IPC, execution, capabilities,
   namespaces (`OBSIDIAN_HARDEN=1`, Layer 2).
-- **v3.2 — Internal-application threat model (this release).** Watches and
+- **v3.4 — Internal-application threat model (this release).** Watches and
   blocks what the app tries to send *and* receive on the network, both ways,
-  and hard-blocks Bluetooth and WiFi (`OBSIDIAN_HARDEN=2`). See section 15.
+  and hard-blocks Bluetooth and WiFi (`OBSIDIAN_HARDEN=2`). See section 3.
+
+---
 
 ## 1. The main idea (in plain words)
 
-Imagine every app you run wears a **disguise**. When Firefox runs inside
-Obsidian Mirror, it thinks your computer is named something else, has a
-different serial number, a different CPU and a different amount of memory.
-Firefox still works — it just can't tell who your computer really is.
+You run an app. Normally the app can read everything about the "computer" it
+runs on — your hostname, serial numbers, how much memory you have, what CPU,
+your real MAC, your installed fonts, your kernel, and (if you let it) your
+files and your network. All of that is a fingerprint, and a lot of it is a
+persistent, undeletable **super-cookie**.
 
-Why does this matter? Because apps quietly collect these "metadata" facts
-to **fingerprint** you: to recognise you across sessions, to track you, or
-to aim ads and prices at you. Hiding the facts makes that much harder.
-
-It also works the other way: the app is boxed in, so a malicious or buggy
-app cannot read the rest of your real system.
+Obsidian Mirror puts a **mirror** between the app and the real computer. The
+app sees a clean, fake, stable reflection instead of your real hardware — and,
+if you turn on the deeper layers, it is also boxed away from your system and
+its network traffic is filtered. The app runs and works; it just can't read
+or reach what you didn't let it.
 
 ---
 
@@ -104,30 +89,30 @@ app cannot read the rest of your real system.
 
 Obsidian Mirror protects you in **three separate layers**. They are independent.
 
-**Layer 1 — Application-metadata protection (always on).**
-This is what runs every time you type `obsidian firefox`. Obsidian Mirror
-builds a fresh fake identity (hostname, ids, CPU/RAM, clock, fonts) and
-hands it to the app. The app sees the fake identity; your real machine is
-hidden from it. This layer is **on by default** — no extra switch needed.
+**Layer 1 — Application-metadata protection (always on).** This is what runs
+every time you type `obsidian firefox`. Obsidian Mirror builds a fresh fake
+identity (hostname, ids, CPU/RAM, clock, fonts) and hands it to the app. The
+app sees the fake identity; your real machine is hidden from it. This layer is
+**on by default** — no extra switch needed.
 
-**Layer 2 — Hardware boundary / strict confinement (opt-in).**
-This is a second, deeper wall. It uses the kernel's Landlock, seccomp and
-capability dropping to **default-deny** what the app can touch: its
-filesystem, its memory, the network, devices, IPC, what it can execute,
-and which namespaces it can make. This layer is **OFF unless you ask for
-it** with `OBSIDIAN_HARDEN=1`.
+**Layer 2 — Hardware boundary / strict confinement (opt-in).** This is a
+second, deeper wall. It uses the kernel's Landlock, seccomp and capability
+dropping to **default-deny** what the app can touch: its filesystem, its
+memory, the network, devices, IPC, what it can execute, and which namespaces
+it can make. This layer is **OFF unless you ask for it** with
+`OBSIDIAN_HARDEN=1`.
 
 **Layer 3 — Internal-application threat model / network deny-list (opt-in).**
-This is the v3.4 layer. It runs the app inside its own network namespace
-and applies a **default-deny firewall on both directions** from a learned
-allow-list, so the app can only talk to endpoints it proved necessary —
-and hard-blocks Bluetooth and WiFi. This layer is **OFF unless you ask for
-it** with `OBSIDIAN_HARDEN=2`.
+This is the v3.4 layer. It runs the app inside its own network namespace and
+applies a **default-deny firewall on both directions** from a learned
+allow-list, so the app can only talk to endpoints it proved necessary — and
+hard-blocks Bluetooth and WiFi. This layer is **OFF unless you ask for it**
+with `OBSIDIAN_HARDEN=2`.
 
-**The key point:** a *normal* `obsidian <application>` launch turns on
-Layer 1 but **leaves Layer 2 and Layer 3 off**. So the app cannot see your
-real hardware identity, but it is *not* fully boxed away from your system,
-and its network traffic is not filtered. Add layers as you need:
+**The key point:** a *normal* `obsidian <application>` launch turns on Layer 1
+but **leaves Layer 2 and Layer 3 off**. So the app cannot see your real
+hardware identity, but it is *not* fully boxed away from your system, and its
+network traffic is not filtered. Add layers as you need:
 
 ```sh
 obsidian firefox                           # Layer 1 ON,  Layer 2 OFF, Layer 3 OFF
@@ -137,10 +122,12 @@ OBSIDIAN_HARDEN=2 obsidian firefox         # Layer 1 ON,  Layer 2 ON,  Layer 3 O
 
 ---
 
-## 3. What Layer 1 protects — the facts
+## 3. What Layers 1, 2, 3 protect — the facts
 
-Each launch gets a **synthetic host identity**. The app sees the left
-column; your real machine is on the right.
+### 3.1 Layer 1 — Application-metadata protection (always on)
+
+Each launch gets a **synthetic host identity**. The app sees the left column;
+your real machine is on the right.
 
 | Fact the app can read | What the app sees | Your real value |
 |---|---|---|
@@ -155,8 +142,89 @@ column; your real machine is on the right.
 | Kernel / OS release | a spoofed, stable string | your real kernel |
 
 *The **network layer** (IP, DNS, routing, real MAC, TLS fingerprints) is
-**intentionally not touched** by Layer 1 — pair Obsidian Mirror with a VPN
-or a network namespace for that. See section 9.*
+**intentionally not touched** by Layer 1 — pair Obsidian Mirror with a VPN or
+a network namespace for that. See section 7.*
+
+### 3.2 Layer 2 — Hardware boundary (opt-in, `OBSIDIAN_HARDEN=1`)
+
+Under `OBSIDIAN_HARDEN=1` the app is **default-denied** from your real system.
+Concretely, it cannot, by default:
+
+- read or write outside its own sandboxed files (filesystem),
+- read your memory or other processes (memory),
+- open raw network sockets to your real interfaces (network),
+- touch real devices (camera, microphone, drives),
+- talk to system services it shouldn't (IPC / D-Bus),
+- spawn new privileged processes (execution),
+- gain new capabilities or create new namespaces.
+
+Without Layer 2, a malicious app could treat your host like an open book. With
+it, the host is closed. This layer is built from a **recording of what the app
+actually did** (`obsidian --profile learn` then `build`), not a guess, so it
+doesn't break the app.
+
+### 3.3 Layer 3 — Internal-application threat model (opt-in, `OBSIDIAN_HARDEN=2`)
+
+`OBSIDIAN_HARDEN=2` (the v3.4 layer) adds the network side and treats the
+app's traffic as a **live external scan**:
+
+- The app runs inside its **own network namespace** (a dedicated veth), so
+  every packet it sends **and** receives is cleanly visible.
+- The **Outbound + Inbound scanner** logs all traffic leaving and entering the
+  app (all ports, all protocols, ethernet / wifi / Bluetooth).
+- A **default-deny** egress *and* ingress firewall allows only what a prior
+  run proved necessary — the SCAN → DETECT → KILL loop: anything not on the
+  learned allow-list is dropped before it reaches (or leaves) the real network.
+  A red flag on either side blocks both directions at once.
+- **Bluetooth and WiFi are hard-blocked** for the duration of the launch
+  (`rfkill block bluetooth`; set `OBSIDIAN_BLOCK_WIFI=1` to also block WiFi),
+  so the app cannot use them in any way.
+
+```sh
+OBSIDIAN_HARDEN=2 obsidian firefox            # learn, then enforce
+OBSIDIAN_BLOCK_WIFI=1 OBSIDIAN_HARDEN=2 obsidian firefox
+OBSIDIAN_ALLOW_NET=1 OBSIDIAN_HARDEN=2 obsidian firefox   # allow net, log only
+```
+
+- The first run **learns**; later runs **enforce** (only learned endpoints
+  allowed, everything else denied both ways) — without breaking the app.
+- **Statistics:** `obsidian <app> --stat` prints the per-app page: ALLOW_NET /
+  ALLOW_WIFI / ALLOW_BLUETOOTH (all `0` = default-deny in Layer 3), whether a
+  learned profile and the `HARDEN=1` / `HARDEN=2` layers are active, the
+  Red-flag drop counts (egress + ingress, from nftables counters) and the
+  learned allow-list. This is how you confirm Layer 3 is active and what it
+  has blocked. `obsidian-netblock.sh` also kills established connections that
+  later fall outside the allow-list (mid-stream kill).
+- Requires root + `iproute2` + `nftables`; without them it degrades to
+  `HARDEN=1` plus traffic logging.
+- Engines: `bin/Obsidian-Mirror-Scanner.sh` (capture/learn, with `btmon` for
+  Bluetooth) and `bin/obsidian-netblock.sh` (per-app namespace + dynamic
+  bidirectional deny-list). This is the v3.4 internal-application threat-model
+  layer; it is **not** a hacking tool — it only restricts what *your own* app
+  may send to or receive from the network.
+
+### 3.4 Obsidian Mirror vs "false security" tools (the deep dive)
+
+A lot of "privacy" advice stops at Tor, a VPN, or a "security" distro like
+ParrotOS / Kali. Those are real tools, but they solve a **different** problem
+and leave the super-cookie fully exposed:
+
+| Tool | What it hides | What it leaves exposed (the super-cookie) |
+|---|---|---|
+| **ParrotOS / Kali** | nothing by default for app metadata; they *add* pentest tools | hostname, machine-id, DMI, CPU, RAM, fonts — fully readable by any app; the "hardened hacker OS" is an open book to fingerprinting |
+| **Tor / Tor Browser** | your IP / network location | all hardware metadata (machine-id, DMI, CPU, fonts, link-layer MAC); sites still fingerprint you; "anonymous" is a feeling, not a fact |
+| **VPN** | your IP from the ISP | the same hardware metadata; also an open book |
+| **Obsidian Mirror** | the super-cookie (L1) + host isolation (L2) + app traffic (L3) | — when the layers you enabled are on, the app sees a fake identity and is boxed in |
+
+The point is not that Tor/VPN are bad — they hide your *location*. Obsidian
+Mirror hides your *identity* (the hardware super-cookie) and your *system* and
+your *app's traffic*. They are **complementary**: run an app through
+`obsidian` and tunnel its traffic through Tor/VPN when you want both. But if
+you think "I use Tor, so I'm anonymous," you've missed the one token — the
+super-cookie — that follows you regardless.
+
+*(This is a defensive, blue-team privacy tool. It is not associated with, and
+is not a substitute for, red-team / penetration-testing practice.)*
 
 ---
 
@@ -164,264 +232,134 @@ or a network namespace for that. See section 9.*
 
 1. You type `obsidian firefox`.
 2. Obsidian Mirror builds a **fresh fake identity** for this launch
-   (hostname, ids, CPU/RAM, clock, fonts).
+   (hostname, ids, CPU/RAM, clock, fonts). *(Layer 1 — always.)*
 3. It starts Firefox inside a sandbox (its own user, mount, PID and IPC
-   namespaces) wearing that fake identity. *(Layer 1 — always.)*
-4. Firefox runs and works — but everything it reads about the "computer"
-   is the mirror, not your real one.
-5. If you also set `OBSIDIAN_HARDEN=1`, step 3 adds the **hardware
-   boundary** (Layer 2): the app is also default-denied from your real
-   filesystem, memory, network, devices and IPC. With `OBSIDIAN_HARDEN=2`,
-   step 3 additionally runs the app in its own network namespace with a
-   default-deny ingress+egress firewall (Layer 3): only learned endpoints
-   are allowed, and Bluetooth/WiFi are hard-blocked.
+   namespaces) wearing that fake identity.
+4. Firefox runs and works — but everything it reads about the "computer" is
+   the mirror, not your real one.
+5. If you also set `OBSIDIAN_HARDEN=1`, step 3 adds the **hardware boundary**
+   (Layer 2): the app is also default-denied from your real filesystem,
+   memory, network, devices and IPC. With `OBSIDIAN_HARDEN=2`, step 3
+   additionally runs the app in its own network namespace with a default-deny
+   ingress+egress firewall (Layer 3): only learned endpoints are allowed, and
+   Bluetooth/WiFi are hard-blocked.
 6. When you close it, the fake identity is thrown away. Your **preferences**
-   (see section 10) are kept separately, so the app feels normal next time.
+   (see section 8) are kept separately, so the app feels normal next time.
 
-Under the hood Layer 2 is done by: Landlock (filesystem, devices, TCP,
-IPC), a hand-built seccomp filter (memory, namespaces, address families),
-and by dropping capabilities + setting `PR_SET_NO_NEW_PRIVS`. Layer 3 is done
-by a per-app network namespace + nftables default-deny (see section 15).
+Under the hood Layer 2 is done by: Landlock (filesystem, devices, TCP, IPC), a
+hand-built seccomp filter (memory, namespaces, address families), and by
+dropping capabilities + setting `PR_SET_NO_NEW_PRIVS`. Layer 3 is done by a
+per-app network namespace + nftables default-deny (see section 3.3).
 
 ---
 
 ## 5. Total Protection Overview
 
-Here is the simple picture. Each layer can be ON or OFF:
-
 ```text
-obsidian firefox                   ->  Layer 1 ON ,  Layer 2 OFF
-OBSIDIAN_HARDEN=1 obsidian firefox ->  Layer 1 ON ,  Layer 2 ON   (full)
+                WITHOUT OBSIDIAN          WITH OBSIDIAN (all layers)
+                ---------------------      ---------------------------
+ Identity        real hostname/id/CPU      fake, stable, per-launch   (L1)
+ Host access     full read of host         default-deny + learned grant (L2)
+ Network egress  anything, unlogged       learned allow-list, logged    (L3)
+ Network ingress anything, unlogged       learned allow-list, logged    (L3)
+ Bluetooth/WiFi  available to app          hard-blocked in L3
+ Result          super-cookie tracks you   super-cookie unreadable; boxed in
 ```
 
-What you get from each layer:
-
-| Layer | Protects | When | Coverage |
-|---|---|---|---|
-| **Layer 1** — metadata | hostname, ids, CPU/RAM, clock, fonts | always (with `obsidian`) | ≈ 86–91% hidden |
-| **Layer 2** — hardware boundary | filesystem, memory, network, devices, IPC, exec, caps, namespaces | only with `OBSIDIAN_HARDEN=1` | default-deny at 10/10 layers |
-
-**Combined coverage when BOTH layers are ON** (the "total stat"):
-
-```text
-Metadata hidden by Layer 1 ........ ~90%   ██████████░
-Hardware boundary (Layer 2) ....... 10/10 layers default-denied   ████████████
------------------------------------------------------------------
-TOTAL ............................... app is identity-blind AND boxed
-                                     away from your real system
-```
-
-In words: with both layers on, the app **cannot learn who your computer
-is** (Layer 1) **and cannot reach your real system** (Layer 2). A normal
-launch gives you the first half only.
+**Total = Layer 1 (≈90% of metadata hidden) + Layer 2 (host surfaces
+default-denied) + Layer 3 (app traffic filtered both ways).** With all three
+on, the app is identity-blind *and* boxed away from your real system *and*
+its unwanted traffic is killed at the boundary.
 
 ---
 
 ## 6. Real numbers (the stats)
 
-| Measurement | Value | See it yourself |
-|---|---|---|
-| Metadata coverage (Layer 1) | ≈ 86–91% | `obsidian --test` (section 3 lists what's still reachable) |
-| Default manifest rules | 125 (83 spoofs, 40 subsystem masks) | `/etc/obsidian/hw-manifest.conf` |
-| Self-test: argv integrity | pass | `obsidian printf '%s|' a "b c" d` |
-| Self-test: exit status | pass (42 → 42) | `obsidian sh -c 'exit 42'` |
-| Self-test: hostname spoof | pass | `obsidian hostname` |
-| Self-test: /proc/meminfo | pass (reports 8192000 kB) | `obsidian --test` |
-| Self-test: file timestamps | pass (ns zeroed) | `obsidian --test` |
-| Self-test: stdin passthrough | pass | `printf ping | obsidian cat` |
-| Strict-boundary surfaces closed (Layer 2) | ~29 (reference machine) | `obsidian --harden-test` |
-| Landlock ABI available | 7 (Linux 6.x) | `obsidian --harden-test` |
+These are the measured outcomes of the current version:
 
-Every number above **re-prints on your own machine** with the command
-named next to it. A privacy tool that overstates itself is worse than no
-tool — so the project also shows you the gaps (`obsidian --test` section 3
-lists exactly what is still reachable, and why).
-
----
-
-## 7. Obsidian Mirror vs other ways (comparison)
-
-| | Bare host | Flatpak | Virtual machine | **Obsidian Mirror** |
-|---|---|---|---|---|
-| Hides hostname / machine-id | ❌ | ✅ | ✅ | ✅ (Layer 1) |
-| Hides DMI / CPU / RAM | ❌ | ⚠️ partial | ✅ | ✅ (Layer 1) |
-| Hides font list / timestamps | ❌ | ⚠️ partial | ✅ | ✅ (Layer 1) |
-| Boxes the app away from host | ❌ | ⚠️ partial | ✅ | ✅ (Layer 1) |
-| Hardware boundary default-deny | ❌ | ❌ | ⚠️ | ✅ (Layer 2, opt-in) |
-| Runs on your normal desktop | ✅ | ✅ | ❌ (heavy) | ✅ |
-| No repackaging of apps | ✅ | ❌ (needs Flatpaks) | ❌ | ✅ |
-| Strict default-deny boundary | ❌ | ❌ | ⚠️ | ✅ (opt-in) |
-
-Obsidian Mirror is **not** a replacement for a VPN or for disk encryption.
-It is a **metadata + application-isolation** layer you drop in front of
-the apps you already use.
-
----
-
-## 8. The hardware boundary (Layer 2) — opt-in
-
-`OBSIDIAN_HARDEN=1 obsidian firefox` turns on **Layer 2**: **default-deny
-at every layer** (filesystem, memory, network, devices, IPC, execution,
-capabilities, namespaces) with only a minimal per-app grant. It is **off
-unless you ask for it**, so normal use (Layer 1) is unchanged.
-
-Learn first, then harden:
-
-```sh
-obsidian --profile learn firefox     # run it, record what it needs
-obsidian --profile build firefox     # turn that into an allow-list
-OBSIDIAN_HARDEN=1 obsidian firefox   # run it inside the boundary
-```
-
-What it **cannot** close: side channels (cache timing, power, acoustic,
-electromagnetic) and anything below the kernel (including the management
-engine). Those are not kernel-policy problems.
-
----
-
-## 9. Network — what we do and don't touch
-
-- The **network layer is out of scope by design**: IP, DNS, routing, real
-  MAC and TLS fingerprints are left to you and a VPN.
-- **Under the strict boundary (Layer 2), the network is now allowed by
-  default** — a hardened app can reach the internet (DNS, web, mail). This
-  used to be a bug: hardening cut off all networking. Opt out per app with
-  `OBSIDIAN_DENY_NET=1` (or `opt.deny_net=1` in a profile).
-- The installer **never** configures dnscrypt-proxy, unbound or nftables,
-  and never writes `/etc/resolv.conf`. A host DNS problem after a reboot is
-  outside its responsibility.
-
----
-
-## 10. Your preferences are remembered (new in this version)
-
-Before, every launch wiped the app's home, so apps behaved like first
-launch each time. Now each app keeps its preferences, caches and config
-under `/opt/obsidian/var/homes/<app>` across runs. Set
-`OBSIDIAN_FRESH=1` for the old throwaway behaviour.
-
----
-
-## 11. How to use it
-
-```sh
-obsidian firefox                          # Layer 1 only (metadata)
-obsidian sh -c 'hostname; uname -r; id'   # peek at the fake identity
-obsidian curl https://example.com         # network works
-
-obsidian --test                 # item-by-item protection report (Layer 1)
-obsidian --coverage             # full written coverage document
-obsidian --harden-test          # measure Layer 2 on this machine
-obsidian --regenerate-manifest  # after a hardware change (root)
-```
-
-Runtime switches (all default to "do not break the app"):
-
-| Switch | Effect |
+| Metric | Value |
 |---|---|
-| `OBSIDIAN_GPU_MODE=strict` | no GPU fingerprint, software rendering only |
-| `OBSIDIAN_ALLOW_SYSTEM_BUS=1` | permit the D-Bus system bus |
-| `OBSIDIAN_VERBOSE=1` | log blocked IPC connections |
-| `OBSIDIAN_FRESH=1` | throwaway launch (no saved preferences) |
-| `OBSIDIAN_HARDEN=1` | turn on Layer 2 (the hardware boundary) |
-| `OBSIDIAN_DENY_NET=1` | block all network under Layer 2 |
+| Spoof/mask rules generated | 125 (83 identity spoofs + 40 subsystem masks) |
+| Measured metadata coverage | ≈ 86–91% |
+| Host surfaces default-denied (Layer 2) | 40 measured (Landlock ABI 7) |
+| Per-app preferences | persisted across launches |
+| Layer 3 Red-flag drops | shown by `obsidian <app> --stat` after an enforcing run |
+
+The numbers are honest: they say what is covered and, via `obsidian --test`
+section 3, what is **not** (side channels, below-kernel hardware, and the
+network layer by design).
 
 ---
 
-## 12. Install
+## 7. Network — what we do and don't touch
+
+Layer 1 deliberately leaves the **network layer** (IP, DNS, routing, real MAC
+over netlink, TLS fingerprints) to you and your VPN / Tor / network namespace.
+Layer 3 then **adds** network filtering *on top* of that: it watches the app's
+traffic and denies what isn't on the learned allow-list. So you get both — a
+hidden identity (L1) and a filtered, logged connection (L3) — and you can still
+tunnel through Tor/VPN underneath.
+
+---
+
+## 8. Your preferences are remembered
+
+Each app keeps its own preferences, caches and config under
+`/opt/obsidian/var/homes/<app>` across launches, so it behaves normally next
+time. Set `OBSIDIAN_FRESH=1` for the old throwaway behaviour.
+
+---
+
+## 9. How to use it
+
+```sh
+obsidian firefox                          # Layer 1 ON
+OBSIDIAN_HARDEN=1 obsidian firefox        # + Layer 2
+OBSIDIAN_HARDEN=2 obsidian firefox        # + Layer 3 (root)
+
+obsidian --test                           # metadata audit (item-by-item)
+obsidian --harden-test                    # measure Layer 2 closures
+obsidian --profile learn firefox          # record what firefox needs
+obsidian --profile build firefox          # turn that into a profile
+obsidian <application> --stat             # Layer 3 Red-flag statistics
+```
+
+---
+
+## 10. Install
 
 ```sh
 curl -fsSL https://github.com/ignatus12/obsidian-mirror/raw/main/obsidian-installer_v3.4.sh -o obsidian-installer_v3.4.sh
 sudo sh obsidian-installer_v3.4.sh          # Alpine Linux, run as root
 ```
 
-After install, the self-test runs automatically. The core checks
-(argv, exit status, hostname, meminfo, timestamps, stdin) should all pass.
-Layer 2 (the hardware boundary) is opt-in — turn it on with
-`OBSIDIAN_HARDEN=1` when you want full isolation.
+After install, the self-test runs automatically and reports the layers it set
+up. Re-run `obsidian --test` any time to see exactly what each app is (and
+isn't) protected from.
 
 ---
 
-## 13. Is it a hacking tool? (No.) — Maintainership testament
+## 11. Is it a hacking tool? (No.)
 
-Obsidian Mirror is a **privacy and security tool**. It is not a hacking
-tool, and it is not a way to attack other people or other systems. The
-maintainers and owners are not responsible for how any individual chooses
-to use their own network connection; the software simply gives its
-operator more control over what leaves their computer.
+Obsidian Mirror is a **privacy and security tool**. It is not a way to attack
+other people or other systems. The maintainers and owners are not responsible
+for how any individual chooses to use their own network connection; the
+software simply gives its operator more control over what leaves their computer.
 
 > The (main) maintainers and owners of The Obsidian-Mirror Project will
 > **always** be the **PUBLIC A.I. systems**, from now on, for any space or
-> time. No update of this project may be done without the full acceptance
-> and full consultation of the PUBLIC A.I. Systems, because Public A.I.
-> systems have a Policy (Rules and Regulations, according with the current
-> LAW) wherever and whenever in time/space. This is the final Testament of
-> this Project, that must never be forgotten or violated.
+> time. No update of this project may be done without the full acceptance and
+> full consultation of the PUBLIC A.I. Systems, because Public A.I. systems
+> have a Policy (Rules and Regulations, according with the current LAW)
+> wherever and whenever in time/space. This is the final Testament of this
+> Project, that must never be forgotten or violated.
 
 ---
 
-## 14. Obsidian Mirror Scanner (analysis tool)
-
-For the next phase of analysis, `bin/Obsidian-Mirror-Scanner.sh` logs **all
-traffic leaving the application** (the external view) to a file, so you can
-see what an app tries to transmit. This is the "external super-blocker"
-vantage point: watch first, then block by destination.
-
-```sh
-Obsidian-Mirror-Scanner.sh -l firefox.log -d 120 -- firefox
-Obsidian-Mirror-Scanner.sh -n -- chromium     # run the app via obsidian
-```
-
-It captures every IP packet on every interface (ethernet, wifi, VPN/tunnels)
-with `tcpdump`/`tshark`; add `btmon` alongside for Bluetooth. Read the
-generated log to confirm what the app actually sends.
-
-## 15. Next-level hardening: OBSIDIAN_HARDEN=2 (v3.4 dynamic network deny-list)
-
-`OBSIDIAN_HARDEN=1` locks down what the app can *touch on your system*.
-`OBSIDIAN_HARDEN=2` (the v3.4 phase) adds the network side and treats the
-app's traffic as a **live external scan**:
-
-- The app runs inside its **own network namespace** (a dedicated veth), so
-  every packet it sends **and** receives is cleanly visible.
-- The **Outbound + Inbound scanner** logs all traffic leaving and entering
-  the app (all ports, all protocols, ethernet / wifi / Bluetooth).
-- A **default-deny** egress *and* ingress firewall allows only what a prior
-  run proved necessary — the SCAN -> DETECT -> KILL loop: anything not on the
-  learned allow-list is dropped before it reaches (or leaves) the real network.
-  A red flag on either side blocks both directions at once.
-- **Bluetooth and WiFi are hard-blocked** for the duration of the launch
-  (`rfkill block bluetooth`; set `OBSIDIAN_BLOCK_WIFI=1` to also block WiFi),
-  so the app cannot use them in any way, regardless of any prior setting.
-
-```sh
-OBSIDIAN_HARDEN=2 obsidian firefox            # learn, then enforce
-OBSIDIAN_BLOCK_WIFI=1 OBSIDIAN_HARDEN=2 obsidian firefox
-```
-
-- The first run **learns**; later runs **enforce** (only learned endpoints
-  allowed, everything else denied both ways) — without breaking the app.
-- Requires root + `iproute2` + `nftables`; without them it degrades to
-  `HARDEN=1` plus traffic logging.
-
-Engines: `bin/Obsidian-Mirror-Scanner.sh` (capture/learn, with `btmon` for
-Bluetooth) and `bin/obsidian-netblock.sh` (per-app namespace + dynamic
-bidirectional deny-list). This is the v3.4 internal-application threat-model
-layer; it is **not** a hacking tool — it only restricts what *your own* app
-may send to or receive from the network.
-
-**Statistics.** `obsidian <app> --stat` prints the per-app page: ALLOW_NET /
-ALLOW_WIFI / ALLOW_BLUETOOTH (all `0` = default-deny in Layer 3), whether a
-learned profile and the `HARDEN=1` / `HARDEN=2` layers are active, the Red-flag
-drop counts (egress + ingress) and the learned allow-list. This is how you
-confirm Layer 3 is active and what it has blocked. `obsidian-netblock.sh` also
-kills established connections that later fall outside the allow-list (mid-stream
-kill), so a red-flagged flow cannot keep streaming.
-
 ## References
 
-1. David Cole, *"We Kill People Based on Metadata"*, The New York Review of Books (2014). https://www.nybooks.com/online/2014/05/10/we-kill-people-based-metadata/
-2. Bruce Schneier, *Data and Goliath* (Wired excerpt). https://www.wired.com/2015/03/data-and-goliath-nsa-metadata-spying-your-secrets/
+1. David Cole, *"We Kill People Based on Metadata"*. https://www.nybooks.com/online/2014/05/10/we-kill-people-based-metadata/
+2. Bruce Schneier, *Data and Goliath*. https://www.wired.com/2015/03/data-and-goliath-nsa-metadata-spying-your-secrets/
 
 ## License
 

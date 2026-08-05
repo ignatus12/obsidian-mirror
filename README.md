@@ -100,9 +100,9 @@ app cannot read the rest of your real system.
 
 ---
 
-## 2. The two protection layers (essential to understand)
+## 2. The Three protection layers (essential to understand)
 
-Obsidian Mirror protects you in **two separate layers**. They are independent.
+Obsidian Mirror protects you in **three separate layers**. They are independent.
 
 **Layer 1 — Application-metadata protection (always on).**
 This is what runs every time you type `obsidian firefox`. Obsidian Mirror
@@ -117,14 +117,22 @@ filesystem, its memory, the network, devices, IPC, what it can execute,
 and which namespaces it can make. This layer is **OFF unless you ask for
 it** with `OBSIDIAN_HARDEN=1`.
 
+**Layer 3 — Internal-application threat model / network deny-list (opt-in).**
+This is the v3.4 layer. It runs the app inside its own network namespace
+and applies a **default-deny firewall on both directions** from a learned
+allow-list, so the app can only talk to endpoints it proved necessary —
+and hard-blocks Bluetooth and WiFi. This layer is **OFF unless you ask for
+it** with `OBSIDIAN_HARDEN=2`.
+
 **The key point:** a *normal* `obsidian <application>` launch turns on
-Layer 1 but **leaves Layer 2 off**. So the app cannot see your real
-hardware identity, but it is *not* fully boxed away from your system. For
-full isolation, activate Layer 2 as well:
+Layer 1 but **leaves Layer 2 and Layer 3 off**. So the app cannot see your
+real hardware identity, but it is *not* fully boxed away from your system,
+and its network traffic is not filtered. Add layers as you need:
 
 ```sh
-obsidian firefox                          # Layer 1 ON,  Layer 2 OFF
-OBSIDIAN_HARDEN=1 obsidian firefox        # Layer 1 ON,  Layer 2 ON  (full)
+obsidian firefox                           # Layer 1 ON,  Layer 2 OFF, Layer 3 OFF
+OBSIDIAN_HARDEN=1 obsidian firefox         # Layer 1 ON,  Layer 2 ON,  Layer 3 OFF
+OBSIDIAN_HARDEN=2 obsidian firefox         # Layer 1 ON,  Layer 2 ON,  Layer 3 ON  (full)
 ```
 
 ---
@@ -163,13 +171,17 @@ or a network namespace for that. See section 9.*
    is the mirror, not your real one.
 5. If you also set `OBSIDIAN_HARDEN=1`, step 3 adds the **hardware
    boundary** (Layer 2): the app is also default-denied from your real
-   filesystem, memory, network, devices and IPC.
+   filesystem, memory, network, devices and IPC. With `OBSIDIAN_HARDEN=2`,
+   step 3 additionally runs the app in its own network namespace with a
+   default-deny ingress+egress firewall (Layer 3): only learned endpoints
+   are allowed, and Bluetooth/WiFi are hard-blocked.
 6. When you close it, the fake identity is thrown away. Your **preferences**
    (see section 10) are kept separately, so the app feels normal next time.
 
 Under the hood Layer 2 is done by: Landlock (filesystem, devices, TCP,
 IPC), a hand-built seccomp filter (memory, namespaces, address families),
-and by dropping capabilities + setting `PR_SET_NO_NEW_PRIVS`.
+and by dropping capabilities + setting `PR_SET_NO_NEW_PRIVS`. Layer 3 is done
+by a per-app network namespace + nftables default-deny (see section 15).
 
 ---
 

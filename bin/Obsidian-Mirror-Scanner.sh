@@ -85,10 +85,14 @@ pick_engine() {
     else echo none; fi
 }
 
-CAP="$(pick_engine)"
-if [ "$CAP" = "none" ]; then
-    echo "ERROR: no packet capture tool found (need tcpdump, tshark or dumpcap)." >&2
-    exit 1
+if [ "$MODE" = "learn" ]; then
+    CAP="none"
+else
+    CAP="$(pick_engine)"
+    if [ "$CAP" = "none" ]; then
+        echo "ERROR: no packet capture tool found (need tcpdump, tshark or dumpcap)." >&2
+        exit 1
+    fi
 fi
 
 # ---- learn mode ------------------------------------------------------
@@ -97,30 +101,27 @@ if [ "$MODE" = "learn" ]; then
         echo "ERROR: log not found: $LOG" >&2
         exit 1
     fi
-    echo "# endpoints observed in $LOG (dst ip : port : proto)"
+    echo "# endpoints observed in $LOG (dir ip.port proto) -- out = app->net, in = net->app"
     # tcpdump verbose lines look like:
-    #   IP 10.0.0.5.44122 > 93.184.216.34.443: Flags [P.], ...
-    #   IP 10.0.0.5 > 1.1.1.1: ICMP ...
-    awk '
+    #   IP 10.42.0.2.44122 > 93.184.216.34.443: Flags [P.], ...
+    #   IP 51.38.1.2.12345 > 10.42.0.2.443: ...   (incoming)
+    awk -v appip="10.42.0.2" '
         /[>]/ {
-            # split on ">" to get the destination side
             n = split($0, a, ">")
-            dst = a[n]
-            # strip trailing ":" and flags
-            sub(/:.*/, "", dst)
-            # destination is last field before ":port" or just ip
-            if (dst ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$/) {
-                # pure IP (e.g. ICMP) -> port "*"
-                print dst" * "proto_of($0)
-            } else if (dst ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) {
-                # ip.port
-                print dst" "proto_of($0)
-            }
+            left = a[1]; right = a[n]
+            lpos = match(left,  /[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?/)
+            l = substr(left,  RSTART, RLENGTH)
+            rpos = match(right, /[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?/)
+            r = substr(right, RSTART, RLENGTH)
+            if (l ~ /10\.42\.0\.2/)      { dir="out"; ext=r }
+            else if (r ~ /10\.42\.0\.2/)  { dir="in";  ext=l }
+            else { next }
+            print dir" "ext" "proto_of($0)
         }
         function proto_of(line,   p) {
             if (line ~ /ICMP/) return "icmp"
             if (line ~ /UDP/) return "udp"
-            if (line ~ /TCP/) return "tcp"
+            if (line ~ /Flags \[/) return "tcp"
             return "ip"
         }
     ' "$LOG" | sort -u

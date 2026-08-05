@@ -244,6 +244,7 @@ fi
     echo "  obsidian --coverage             what is and is not protected"
     echo "  obsidian --regenerate-manifest  rescan this hardware (root)"
     echo "  obsidian --version"
+    echo "  obsidian <app> --stat           Red-Flag / Layer 3 statistics"
     echo
     echo "Strict boundary - default-deny confinement, off unless asked for:"
     echo "  obsidian --harden-test          measure what the boundary closes"
@@ -251,6 +252,10 @@ fi
     echo "  obsidian --profile learn <app>  record what an application needs"
     echo "  obsidian --profile build <app>  turn that into an allow-list"
     echo "  OBSIDIAN_HARDEN=1 obsidian <app>   run it inside the boundary"
+    echo
+    echo "Next level (Layer 3) - internal-application threat model, off unless asked for:"
+    echo "  OBSIDIAN_HARDEN=2 obsidian <app>            per-app netns + default-deny traffic"
+    echo "  OBSIDIAN_ALLOW_NET=1 OBSIDIAN_HARDEN=2 obsidian <app>   allow net, log only"
 ''',
     )
     src = replace_once(

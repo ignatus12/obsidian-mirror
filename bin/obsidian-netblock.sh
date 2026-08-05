@@ -105,31 +105,34 @@ build_rules() {
         echo "table inet obsdeny_$KEY {"
         echo "    chain egress {"
         echo "        type filter hook output priority 0; policy drop;"
-        # allow loopback and established
         echo "        iifname \"lo\" accept"
         echo "        ct state established,related accept"
-        # allow each learned destination
-        "$SCANNER" learn -l "$LOG" 2>/dev/null | while read -r dst port proto; do
-            [ -z "$dst" ] && continue
-            if [ "$proto" = "icmp" ] || [ "$port" = "*" ]; then
-                echo "        ip daddr $dst accept"
+        # allow only learned outbound endpoints (dir=out)
+        "$SCANNER" learn -l "$LOG" 2>/dev/null | while read -r dir ep proto; do
+            [ "$dir" = "out" ] || continue
+            if [ "$proto" = "icmp" ]; then
+                echo "        ip daddr $ep accept"
             else
-                echo "        ip daddr $dst $proto dport $port accept"
+                ip="${ep%.*}"; port="${ep##*.}"
+                [ "$port" = "$ep" ] && continue
+                echo "        ip daddr $ip $proto dport $port accept"
             fi
         done
-        # DNS is usually needed; allow common resolvers generically
         echo "        # everything else is denied by policy drop (egress)"
         echo "    }"
         echo "    chain ingress {"
         echo "        type filter hook input priority 0; policy drop;"
         echo "        iifname \"lo\" accept"
         echo "        ct state established,related accept"
-        "$SCANNER" learn -l "$LOG" 2>/dev/null | while read -r dst port proto; do
-            [ -z "$dst" ] && continue
-            if [ "$proto" = "icmp" ] || [ "$port" = "*" ]; then
-                echo "        ip saddr $dst accept"
+        # allow only learned inbound endpoints (dir=in)
+        "$SCANNER" learn -l "$LOG" 2>/dev/null | while read -r dir ep proto; do
+            [ "$dir" = "in" ] || continue
+            if [ "$proto" = "icmp" ]; then
+                echo "        ip saddr $ep accept"
             else
-                echo "        ip saddr $dst $proto sport $port accept"
+                ip="${ep%.*}"; port="${ep##*.}"
+                [ "$port" = "$ep" ] && continue
+                echo "        ip saddr $ip $proto sport $port accept"
             fi
         done
         echo "        # everything else is denied by policy drop (ingress)"
@@ -143,34 +146,58 @@ stat_app() {
     KEY="$1"
     TBL="obsdeny_$KEY"
     echo "=== Obsidian Mirror - stats for $KEY (v3.4) ==="
-    echo "ALLOW_NET       : 0  (default-deny in Layer 3)"
+    echo "ALLOW_NET       : ${OBSIDIAN_ALLOW_NET:-0}  (0 = default-deny in Layer 3)"
     echo "ALLOW_WIFI      : 0  (hard-blocked in Layer 3)"
     echo "ALLOW_BLUETOOTH : 0  (hard-blocked in Layer 3)"
+    # Layer 2 (strict boundary) status
+    PROFILE=""
+    for p in "/etc/obsidian/profiles/$KEY" "$OBSIDIAN_DIR/var/profiles/$KEY" "$SCANDIR/../profiles/$KEY"; do
+        [ -f "$p" ] && PROFILE="$p"
+    done
+    if [ -n "$PROFILE" ]; then
+        echo "HARDEN_OBSIDIAN=1 : ACTIVE (profile present: $PROFILE)"
+    else
+        echo "HARDEN_OBSIDIAN=1 : NOT ACTIVE (no profile learned/built)"
+    fi
+    # Layer 3 (network deny-list) status
     if nft list table inet "$TBL" >/dev/null 2>&1; then
         echo "HARDEN_OBSIDIAN=2 : ACTIVE (deny-list table present)"
         EG=$(nft list chain inet "$TBL" egress 2>/dev/null | awk '/packets/{p=$2} END{print p+0}')
         IN=$(nft list chain inet "$TBL" ingress 2>/dev/null | awk '/packets/{p=$2} END{print p+0}')
-        echo "Red-flag drops (egress)  : ${EG:-0} packets"
-        echo "Red-flag drops (ingress) : ${IN:-0} packets"
+        echo "Red-flag OUTGOING drops : ${EG:-0} packets"
+        echo "Red-flag INCOMING drops : ${IN:-0} packets"
     else
         echo "HARDEN_OBSIDIAN=2 : NOT ACTIVE"
     fi
-    if [ -f "$SCANDIR/$KEY.prior.log" ] || [ -f "$SCANDIR/$KEY.log" ]; then
-        echo "Learned traffic log : present"
-    else
+    if [ ! -f "$SCANDIR/$KEY.log" ]; then
         echo "Learned traffic log : none (run OBSIDIAN_HARDEN=2 once to learn)"
+        return 0
     fi
-    if [ -f "$SCANDIR/$KEY.nft" ]; then
-        echo "Allow-list endpoints :"
-        grep -E 'ip (s?addr|daddr)' "$SCANDIR/$KEY.nft" | sed 's/^[[:space:]]*//'
-    fi
+    echo "Learned traffic log : present"
+    # permitted set = IPs in the allow-list (.nft)
+    PERMITTED=""
+    [ -f "$SCANDIR/$KEY.nft" ] && PERMITTED=$(grep -E 'ip (s?addr|daddr)' "$SCANDIR/$KEY.nft" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | sort -u)
+    # parse learned endpoints into out/in lists (dir ip.port proto)
+    OUT_L=$("$SCANNER" learn -l "$SCANDIR/$KEY.log" 2>/dev/null | awk '$1=="out"{print $2" "$3}')
+    IN_L=$("$SCANNER" learn -l "$SCANDIR/$KEY.log" 2>/dev/null | awk '$1=="in"{print $2" "$3}')
+    echo
+    echo "--- OUTGOING Red-Flag block/deny/kill list (attempted, not permitted) ---"
+    echo "$OUT_L" | while read -r ep proto; do
+        ip="${ep%.*}"
+        echo "$PERMITTED" | grep -qx "$ip" || echo "BLOCK  out  $ep  $proto"
+    done | sort | uniq -c
+    echo "--- INCOMING Red-Flag block/deny/kill list (attempted, not permitted) ---"
+    echo "$IN_L" | while read -r ep proto; do
+        ip="${ep%.*}"
+        echo "$PERMITTED" | grep -qx "$ip" || echo "BLOCK  in  $ep  $proto"
+    done | sort | uniq -c
 }
 
 kill_established() {
     KEY="$1"; LOG="$SCANDIR/$KEY.log"
     command -v conntrack >/dev/null 2>&1 || return 0
     [ -f "$LOG" ] || return 0
-    allowed=$("$SCANNER" learn -l "$LOG" 2>/dev/null | awk '{print $1}')
+    allowed=$("$SCANNER" learn -l "$LOG" 2>/dev/null | awk '$1=="out"{print $2}' | sed 's/\.[0-9]*$//')
     conntrack -L 2>/dev/null | while read -r line; do
         dst=$(printf '%s\n' "$line" | sed -n 's/.*dst=//; s/ .*//p')
         [ -z "$dst" ] && continue
@@ -215,7 +242,7 @@ run_app() {
     fi
 
     # start capture on the host-side veth (this app's traffic only)
-    tcpdump -n -tttt -s 0 -i "$VH" "not (host 127.0.0.1 or host ::1)" -w "$LOG" >/dev/null 2>&1 &
+    tcpdump -n -tttt -v -i "$VH" "not (host 127.0.0.1 or host ::1)" > "$LOG" 2>&1 &
     CAP_PID=$!
 
     # if we already learned a deny-list, apply it now (enforce prior learning)

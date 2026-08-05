@@ -329,7 +329,7 @@ obsidian <application> --stat             # Layer 3 Red-flag statistics
 ## 10. Install
 
 ```sh
-curl -fsSL https://github.com/ignatus12/obsidian-mirror/raw/main/obsidian-installer_v3.4.sh -o obsidian-installer_v3.4.sh
+curl -fsSL https://github.com/ignatus12/obsidian-mirror-project/raw/main/obsidian-installer_v3.4.sh -o obsidian-installer_v3.4.sh
 sudo sh obsidian-installer_v3.4.sh          # Alpine Linux, run as root
 ```
 

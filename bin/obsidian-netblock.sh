@@ -147,7 +147,11 @@ stat_app() {
     KEY="$1"
     TBL="obsdeny_$KEY"
     echo "=== Obsidian Mirror - stats for $KEY (v3.4) ==="
-    echo "ALLOW_NET       : ${OBSIDIAN_ALLOW_NET:-0}  (0 = default-deny in Layer 3)"
+    if [ "${OBSIDIAN_DENY_NET:-0}" = "1" ]; then
+        echo "ALLOW_NET       : 0  (network denied: OBSIDIAN_DENY_NET=1 set)"
+    else
+        echo "ALLOW_NET       : 1  (network allowed by default)"
+    fi
     echo "ALLOW_WIFI      : 0  (hard-blocked in Layer 3)"
     echo "ALLOW_BLUETOOTH : 0  (hard-blocked in Layer 3)"
     # Layer 2 (strict boundary) status
@@ -247,7 +251,7 @@ run_app() {
     CAP_PID=$!
 
     # if we already learned a deny-list, apply it now (enforce prior learning)
-    if [ "${OBSIDIAN_ALLOW_NET:-0}" != "1" ]; then
+    if [ "${OBSIDIAN_DENY_NET:-0}" = "1" ]; then
         [ -f "$PRIOR" ] && apply_rules "$KEY"
     fi
 
@@ -259,12 +263,12 @@ run_app() {
 
     # promote this run's log to "prior" for next time, and (re)build rules
     [ -f "$LOG" ] && cp "$LOG" "$PRIOR" 2>/dev/null
-    if [ "${OBSIDIAN_ALLOW_NET:-0}" != "1" ]; then
+    if [ "${OBSIDIAN_DENY_NET:-0}" = "1" ]; then
         build_rules "$KEY" "$LOG" >/dev/null
         # v3.4: mid-stream kill of any established connection not on the allow-list
         kill_established "$KEY"
     else
-        warn "OBSIDIAN_ALLOW_NET=1: logging only, deny-list not applied"
+        warn "OBSIDIAN_DENY_NET not set: logging traffic, network allowed (set OBSIDIAN_DENY_NET=1 to enforce the deny-list)"
     fi
 
     netns_teardown "$KEY"

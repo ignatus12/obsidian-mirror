@@ -172,18 +172,19 @@ app's traffic as a **live external scan**:
   every packet it sends **and** receives is cleanly visible.
 - The **Outbound + Inbound scanner** logs all traffic leaving and entering the
   app (all ports, all protocols, ethernet / wifi / Bluetooth).
-- A **default-deny** egress *and* ingress firewall allows only what a prior
-  run proved necessary — the SCAN → DETECT → KILL loop: anything not on the
-  learned allow-list is dropped before it reaches (or leaves) the real network.
+- **Network is allowed by default.** Set `OBSIDIAN_DENY_NET=1` to apply a
+  default-deny egress *and* ingress firewall that allows only what a prior run
+  proved necessary — the SCAN → DETECT → KILL loop: anything not on the learned
+  allow-list is dropped before it reaches (or leaves) the real network.
   A red flag on either side blocks both directions at once.
 - **Bluetooth and WiFi are hard-blocked** for the duration of the launch
   (`rfkill block bluetooth`; set `OBSIDIAN_BLOCK_WIFI=1` to also block WiFi),
   so the app cannot use them in any way.
 
 ```sh
-OBSIDIAN_HARDEN=2 obsidian firefox            # learn, then enforce
+OBSIDIAN_HARDEN=2 obsidian firefox            # log traffic, network allowed
+OBSIDIAN_DENY_NET=1 OBSIDIAN_HARDEN=2 obsidian firefox   # enforce learned deny-list
 OBSIDIAN_BLOCK_WIFI=1 OBSIDIAN_HARDEN=2 obsidian firefox
-OBSIDIAN_ALLOW_NET=1 OBSIDIAN_HARDEN=2 obsidian firefox   # allow net, log only
 ```
 
 - The first run **learns**; later runs **enforce** (only learned endpoints

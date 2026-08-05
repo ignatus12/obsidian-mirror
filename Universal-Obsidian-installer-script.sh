@@ -4646,6 +4646,11 @@ if [ "${OBSIDIAN_HARDEN:-}" = "2" ]; then
     exec "$OBSIDIAN_DIR/bin/obsidian-netblock.sh" run "${OBSIDIAN_APPKEY:-app}" -- "$@"
 fi
 
+# v3.4: `obsidian <app> --stat` prints the per-app statistics page
+for _a in "$@"; do
+    [ "$_a" = "--stat" ] && { "$OBSIDIAN_DIR/bin/obsidian-netblock.sh" stat "${OBSIDIAN_APPKEY:-app}"; exit 0; }
+done
+
 REAL_NPROC="$(nproc 2>/dev/null || echo 1)"
 if [ "$REAL_NPROC" -ge 2 ]; then
     FAKE_CORE_COUNT=2
@@ -6301,6 +6306,45 @@ build_rules() {
     echo "$OUT"
 }
 
+stat_app() {
+    KEY="$1"
+    TBL="obsdeny_$KEY"
+    echo "=== Obsidian Mirror - stats for $KEY (v3.4) ==="
+    echo "ALLOW_NET       : 0  (default-deny in Layer 3)"
+    echo "ALLOW_WIFI      : 0  (hard-blocked in Layer 3)"
+    echo "ALLOW_BLUETOOTH : 0  (hard-blocked in Layer 3)"
+    if nft list table inet "$TBL" >/dev/null 2>&1; then
+        echo "HARDEN_OBSIDIAN=2 : ACTIVE (deny-list table present)"
+        EG=$(nft list chain inet "$TBL" egress 2>/dev/null | awk '/packets/{p=$2} END{print p+0}')
+        IN=$(nft list chain inet "$TBL" ingress 2>/dev/null | awk '/packets/{p=$2} END{print p+0}')
+        echo "Red-flag drops (egress)  : ${EG:-0} packets"
+        echo "Red-flag drops (ingress) : ${IN:-0} packets"
+    else
+        echo "HARDEN_OBSIDIAN=2 : NOT ACTIVE"
+    fi
+    if [ -f "$SCANDIR/$KEY.prior.log" ] || [ -f "$SCANDIR/$KEY.log" ]; then
+        echo "Learned traffic log : present"
+    else
+        echo "Learned traffic log : none (run OBSIDIAN_HARDEN=2 once to learn)"
+    fi
+    if [ -f "$SCANDIR/$KEY.nft" ]; then
+        echo "Allow-list endpoints :"
+        grep -E 'ip (s?addr|daddr)' "$SCANDIR/$KEY.nft" | sed 's/^[[:space:]]*//'
+    fi
+}
+
+kill_established() {
+    KEY="$1"; LOG="$SCANDIR/$KEY.log"
+    command -v conntrack >/dev/null 2>&1 || return 0
+    [ -f "$LOG" ] || return 0
+    allowed=$(Obsidian-Mirror-Scanner.sh learn -l "$LOG" 2>/dev/null | awk '{print $1}')
+    conntrack -L 2>/dev/null | while read -r line; do
+        dst=$(printf '%s\n' "$line" | sed -n 's/.*dst=//; s/ .*//p')
+        [ -z "$dst" ] && continue
+        printf '%s\n' "$allowed" | grep -qx "$dst" || conntrack -D -d "$dst" 2>/dev/null
+    done
+}
+
 apply_rules() {
     KEY="$1"; NS="obs-$KEY"; VH="veth-$KEY"
     OUT="$SCANDIR/$KEY.nft"
@@ -6353,6 +6397,8 @@ run_app() {
     # promote this run's log to "prior" for next time, and (re)build rules
     [ -f "$LOG" ] && cp "$LOG" "$PRIOR" 2>/dev/null
     build_rules "$KEY" "$LOG" >/dev/null
+    # v3.4: mid-stream kill of any established connection not on the allow-list
+    kill_established "$KEY"
 
     netns_teardown "$KEY"
     return "$APP_RC"
@@ -6363,8 +6409,10 @@ case "${1:-}" in
     run)      shift; KEY="$1"; shift; run_app "$KEY" "$@" ;;
     build)    shift; build_rules "$1" "$2" ;;
     apply)    shift; apply_rules "$1" ;;
+    stat)     shift; stat_app "$1" ;;
+    kill)     shift; kill_established "$1" ;;
     teardown) shift; netns_teardown "$1" ;;
-    *) echo "usage: $0 run|build|apply|teardown <appkey> [args...]" >&2; exit 2 ;;
+    *) echo "usage: $0 run|build|apply|stat|kill|teardown <appkey> [args...]" >&2; exit 2 ;;
 esac
 OBSIDIAN_PAYLOAD_NETBLOCK_SH
 chmod 755 "$BINDIR/obsidian-netblock.sh"

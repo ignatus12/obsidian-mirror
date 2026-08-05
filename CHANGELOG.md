@@ -39,14 +39,18 @@ your own machine with the command named next to it.
   degrades to logging-only when those are unavailable. Not a hacking tool:
   it only restricts what *your* app may send out.
 
-- **v3.2 — internal-application threat model (bidirectional + RF).**
-  `OBSIDIAN_HARDEN=2` now applies a **default-deny firewall on BOTH
-  directions** (egress and ingress) from a learned allow-list, so the app
-  can only talk to endpoints it previously proved necessary. Bluetooth is
-  hard-blocked for the launch (`rfkill block bluetooth`; `OBSIDIAN_BLOCK_WIFI=1`
-  also blocks WiFi). Documented as the v3.2 development phase; the installer
-  is published as `Universal-Obsidian-Mirror-installer-script_v3_2.sh`
-  alongside the historical `..._v2_0.sh`.
+- **v3.4 — statistics + mid-stream kill + versioned installer.**
+  - `obsidian <app> --stat` prints a per-app page: ALLOW_NET / ALLOW_WIFI /
+    ALLOW_BLUETOOTH (all 0 = default-deny in Layer 3), whether the learned
+    profile and HARDEN=1 / HARDEN=2 layers are active, the Red-flag drop
+    counts (egress + ingress, read from nftables counters) and the learned
+    allow-list.
+  - `obsidian-netblock.sh` now also performs a **conntrack mid-stream kill**
+    of established connections that fall outside the learned allow-list.
+  - Installer published as `obsidian-installer_v3.4.sh` (version in the name);
+    the unversioned `Universal-Obsidian-Mirror-installer-script.sh` is still
+    the same latest build. Presentation rewritten to lead with the three-layer
+    v3.4 overview and the super-cookie framing.
 
 - **README rewritten as a simple introductory presentation.** A
   summary-up-front plus comparison and data tables, under 30 sections,

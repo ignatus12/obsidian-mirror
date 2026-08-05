@@ -1834,6 +1834,11 @@ if [ "${OBSIDIAN_HARDEN:-}" = "2" ]; then
     exec "$OBSIDIAN_DIR/bin/obsidian-netblock.sh" run "${OBSIDIAN_APPKEY:-app}" -- "$@"
 fi
 
+# v3.4: `obsidian <app> --stat` prints the per-app statistics page
+for _a in "$@"; do
+    [ "$_a" = "--stat" ] && { "$OBSIDIAN_DIR/bin/obsidian-netblock.sh" stat "${OBSIDIAN_APPKEY:-app}"; exit 0; }
+done
+
 REAL_NPROC="$(nproc 2>/dev/null || echo 1)"
 if [ "$REAL_NPROC" -ge 2 ]; then
     FAKE_CORE_COUNT=2

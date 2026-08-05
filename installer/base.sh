@@ -52,7 +52,7 @@
 
 set -eu
 
-OBSIDIAN_VERSION="2.0"
+OBSIDIAN_VERSION="3.4"
 PREFIX="/opt/obsidian"
 BINDIR="$PREFIX/bin"
 LIBDIR="$PREFIX/lib"
@@ -114,7 +114,7 @@ cat <<'BANNER'
  \___/|_.__/|___/_|\__,_|_|\__,_|_| |_||_|  |_|_|_|  |_|  \___/|_|
 BANNER
 printf '%s' "$C_0"
-printf ' Universal Host <-> Application Isolation Layer   v%s\n' "$OBSIDIAN_VERSION"
+printf ' Universal Host <-> Application Isolation Layer   v%s  (three protection layers)\n' "$OBSIDIAN_VERSION"
 printf ' Network layer intentionally out of scope.\n'
 
 # ---------------------------------------------------------------------

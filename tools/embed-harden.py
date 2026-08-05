@@ -576,6 +576,21 @@ DONEEOF''',
   includes the management engine on this very processor. Those are not
   kernel-policy problems, and this does not pretend to solve them.
 
+  NEXT LEVEL (v3.4) - the internal-application threat model (Layer 3):
+  OBSIDIAN_HARDEN=2 adds a third layer. The app runs in its own network
+  namespace; an Outbound+Inbound scanner logs all its traffic, and a
+  default-deny firewall (both directions) allows only what it proved
+  necessary. Bluetooth and WiFi are hard-blocked. Confirm it live with:
+
+      obsidian <application> --stat        per-app Red-flag statistics
+      OBSIDIAN_HARDEN=2 obsidian firefox   learn, then enforce
+      OBSIDIAN_ALLOW_NET=1 OBSIDIAN_HARDEN=2 obsidian firefox   allow net, log only
+
+  Engines: bin/Obsidian-Mirror-Scanner.sh (capture/learn) and
+  bin/obsidian-netblock.sh (per-app namespace + dynamic deny-list).
+  NOTE: HARDEN=2 needs root (it builds a network namespace and nftables
+  rules); run it as root.
+
 DONEEOF''',
     )
 

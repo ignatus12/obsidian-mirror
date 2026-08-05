@@ -52,7 +52,7 @@
 
 set -eu
 
-OBSIDIAN_VERSION="2.0"
+OBSIDIAN_VERSION="3.4"
 PREFIX="/opt/obsidian"
 BINDIR="$PREFIX/bin"
 LIBDIR="$PREFIX/lib"
@@ -117,7 +117,7 @@ cat <<'BANNER'
  \___/|_.__/|___/_|\__,_|_|\__,_|_| |_||_|  |_|_|_|  |_|  \___/|_|
 BANNER
 printf '%s' "$C_0"
-printf ' Universal Host <-> Application Isolation Layer   v%s\n' "$OBSIDIAN_VERSION"
+printf ' Universal Host <-> Application Isolation Layer   v%s  (three protection layers)\n' "$OBSIDIAN_VERSION"
 printf ' Network layer intentionally out of scope.\n'
 
 # ---------------------------------------------------------------------
@@ -6205,6 +6205,9 @@ cat > "$BINDIR/obsidian-netblock.sh" <<'OBSIDIAN_PAYLOAD_NETBLOCK_SH'
 
 set -u
 
+SCRIPTDIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+SCANNER="$SCRIPTDIR/Obsidian-Mirror-Scanner.sh"
+
 SCANDIR="${OBSIDIAN_SCANDIR:-/opt/obsidian/var/scan}"
 SUBNET="10.42.0.0/24"
 HOSTIP="10.42.0.1"
@@ -6276,7 +6279,7 @@ build_rules() {
         echo "        iifname \"lo\" accept"
         echo "        ct state established,related accept"
         # allow each learned destination
-        Obsidian-Mirror-Scanner.sh learn -l "$LOG" 2>/dev/null | while read -r dst port proto; do
+        "$SCANNER" learn -l "$LOG" 2>/dev/null | while read -r dst port proto; do
             [ -z "$dst" ] && continue
             if [ "$proto" = "icmp" ] || [ "$port" = "*" ]; then
                 echo "        ip daddr $dst accept"
@@ -6291,7 +6294,7 @@ build_rules() {
         echo "        type filter hook input priority 0; policy drop;"
         echo "        iifname \"lo\" accept"
         echo "        ct state established,related accept"
-        Obsidian-Mirror-Scanner.sh learn -l "$LOG" 2>/dev/null | while read -r dst port proto; do
+        "$SCANNER" learn -l "$LOG" 2>/dev/null | while read -r dst port proto; do
             [ -z "$dst" ] && continue
             if [ "$proto" = "icmp" ] || [ "$port" = "*" ]; then
                 echo "        ip saddr $dst accept"
@@ -6337,7 +6340,7 @@ kill_established() {
     KEY="$1"; LOG="$SCANDIR/$KEY.log"
     command -v conntrack >/dev/null 2>&1 || return 0
     [ -f "$LOG" ] || return 0
-    allowed=$(Obsidian-Mirror-Scanner.sh learn -l "$LOG" 2>/dev/null | awk '{print $1}')
+    allowed=$("$SCANNER" learn -l "$LOG" 2>/dev/null | awk '{print $1}')
     conntrack -L 2>/dev/null | while read -r line; do
         dst=$(printf '%s\n' "$line" | sed -n 's/.*dst=//; s/ .*//p')
         [ -z "$dst" ] && continue
@@ -6365,7 +6368,7 @@ run_app() {
     if ! need_root || ! SETUP="$(netns_setup "$KEY")"; then
         # logging-only fallback: just run the app via obsidian and capture host-wide
         warn "enforcement unavailable; running with logging only"
-        HARDEN_OBSIDIAN=1 Obsidian-Mirror-Scanner.sh -k "$KEY" -- $APP &
+        HARDEN_OBSIDIAN=1 "$SCANNER" -k "$KEY" -- $APP &
         SC_PID=$!
         HARDEN_OBSIDIAN=1 obsidian $APP
         kill "$SC_PID" 2>/dev/null; kill -9 "$SC_PID" 2>/dev/null
@@ -6386,7 +6389,9 @@ run_app() {
     CAP_PID=$!
 
     # if we already learned a deny-list, apply it now (enforce prior learning)
-    [ -f "$PRIOR" ] && apply_rules "$KEY"
+    if [ "${OBSIDIAN_ALLOW_NET:-0}" != "1" ]; then
+        [ -f "$PRIOR" ] && apply_rules "$KEY"
+    fi
 
     # launch the app inside the netns, through obsidian (HARDEN=1)
     HARDEN_OBSIDIAN=1 ip netns exec "$NS" obsidian $APP
@@ -6396,9 +6401,13 @@ run_app() {
 
     # promote this run's log to "prior" for next time, and (re)build rules
     [ -f "$LOG" ] && cp "$LOG" "$PRIOR" 2>/dev/null
-    build_rules "$KEY" "$LOG" >/dev/null
-    # v3.4: mid-stream kill of any established connection not on the allow-list
-    kill_established "$KEY"
+    if [ "${OBSIDIAN_ALLOW_NET:-0}" != "1" ]; then
+        build_rules "$KEY" "$LOG" >/dev/null
+        # v3.4: mid-stream kill of any established connection not on the allow-list
+        kill_established "$KEY"
+    else
+        warn "OBSIDIAN_ALLOW_NET=1: logging only, deny-list not applied"
+    fi
 
     netns_teardown "$KEY"
     return "$APP_RC"
@@ -7852,6 +7861,21 @@ cat <<'DONEEOF'
   electromagnetic - and anything running below the kernel, which
   includes the management engine on this very processor. Those are not
   kernel-policy problems, and this does not pretend to solve them.
+
+  NEXT LEVEL (v3.4) - the internal-application threat model (Layer 3):
+  OBSIDIAN_HARDEN=2 adds a third layer. The app runs in its own network
+  namespace; an Outbound+Inbound scanner logs all its traffic, and a
+  default-deny firewall (both directions) allows only what it proved
+  necessary. Bluetooth and WiFi are hard-blocked. Confirm it live with:
+
+      obsidian <application> --stat        per-app Red-flag statistics
+      OBSIDIAN_HARDEN=2 obsidian firefox   learn, then enforce
+      OBSIDIAN_ALLOW_NET=1 OBSIDIAN_HARDEN=2 obsidian firefox   allow net, log only
+
+  Engines: bin/Obsidian-Mirror-Scanner.sh (capture/learn) and
+  bin/obsidian-netblock.sh (per-app namespace + dynamic deny-list).
+  NOTE: HARDEN=2 needs root (it builds a network namespace and nftables
+  rules); run it as root.
 
 DONEEOF
 

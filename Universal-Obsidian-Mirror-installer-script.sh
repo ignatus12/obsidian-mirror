@@ -1,8 +1,9 @@
 #!/bin/sh
 # =====================================================================
-#  Universal-Obsidian-Mirror-installer-script.sh
+#  obsidian-installer_v3.4.sh
 #
-#  OBSIDIAN MIRROR v2 - Universal Host <-> Application Isolation Layer
+#  OBSIDIAN MIRROR v3.4 - Universal Host <-> Application Isolation Layer
+#  (three protection layers: metadata / hardware boundary / network)
 #
 #  One self-contained installer. No network access, no repository, no
 #  companion files: every C source, shell stage, fontconfig file and
@@ -29,9 +30,14 @@
 #      obsidian --coverage                  read the honest limits
 #
 #  SCOPE
-#    Host <-> application metadata only. The NETWORK LAYER IS EXCLUDED
-#    BY DESIGN - IP, DNS, MAC over netlink, TLS fingerprints. Pair this
-#    with a VPN or a network namespace if you need that too.
+#    Layer 1 (always on) hides host<->application metadata: hostname, ids,
+#    CPU/RAM, clock, fonts. Layer 2 (OBSIDIAN_HARDEN=1) default-denies the
+#    filesystem, memory, devices, IPC, execution and namespaces. Layer 3
+#    (OBSIDIAN_HARDEN=2) adds a per-app network namespace with a default-deny
+#    ingress+egress firewall, so the app's traffic is filtered both ways and
+#    Bluetooth/WiFi are hard-blocked. With all three layers the network layer
+#    IS covered; the plain "obsidian <app>" launch leaves the network to you
+#    (pair with a VPN or network namespace if you want it hidden too).
 #
 #  HARD RULE
 #    Nothing here may change the behaviour of a program launched with

@@ -39,6 +39,7 @@ SCRIPTDIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
 SCANNER="$SCRIPTDIR/Obsidian-Mirror-Scanner.sh"
 
 SCANDIR="${OBSIDIAN_SCANDIR:-/opt/obsidian/var/scan}"
+OBSIDIAN_DIR="${OBSIDIAN_DIR:-/opt/obsidian}"
 SUBNET="10.42.0.0/24"
 HOSTIP="10.42.0.1"
 APPIP="10.42.0.2"

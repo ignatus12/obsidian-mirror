@@ -1728,7 +1728,7 @@ cat > "$BINDIR/obsidian-launch" <<'OBSIDIAN_PAYLOAD_LAUNCH'
 #   OBSIDIAN_VERBOSE=1                log blocked IPC connections
 # ============================================================
 
-OBSIDIAN_DIR="/opt/obsidian"
+OBSIDIAN_DIR="/opt/obsidian"; export OBSIDIAN_DIR
 FAKE_ROOT="$OBSIDIAN_DIR/fake_root"
 LIB_DIR="$OBSIDIAN_DIR/lib"
 INNER_STAGE="$OBSIDIAN_DIR/bin/obsidian-inner"
@@ -1831,7 +1831,7 @@ export OBSIDIAN_APPKEY
 # inside its own netns, logs its traffic, and denies everything it did not
 # prove it needs.
 if [ "${OBSIDIAN_HARDEN:-}" = "2" ]; then
-    exec "$OBSIDIAN_DIR/bin/obsidian-netblock.sh" run "${OBSIDIAN_APPKEY:-app}" -- "$@"
+    exec "$OBSIDIAN_DIR/bin/obsidian-netblock.sh" run "${OBSIDIAN_APPKEY:-app}" "$@"
 fi
 
 # v3.4: `obsidian <app> --stat` prints the per-app statistics page

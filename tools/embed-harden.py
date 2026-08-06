@@ -254,8 +254,11 @@ fi
     echo "  OBSIDIAN_HARDEN=1 obsidian <app>   run it inside the boundary"
     echo
     echo "Next level (Layer 3) - internal-application threat model, off unless asked for:"
-    echo "  OBSIDIAN_HARDEN=2 obsidian <app>            per-app netns; traffic logged, network allowed by default"
-    echo "  OBSIDIAN_DENY_NET=1 OBSIDIAN_HARDEN=2 obsidian <app>   enforce the learned deny-list (block unlearned traffic)"
+    echo "  OBSIDIAN_HARDEN=2 obsidian <app>            per-app netns (needs ROOT); logs traffic,"
+    echo "                                           network allowed by default"
+    echo "  OBSIDIAN_DENY_NET=1 OBSIDIAN_HARDEN=2 obsidian <app>   enforce the learned deny-list"
+    echo "  NOTE: run 'OBSIDIAN_HARDEN=2 obsidian <app>' once as root to LEARN, then add"
+    echo "        OBSIDIAN_DENY_NET=1 to enforce (default stays allow-by-default)."
 ''',
     )
     src = replace_once(

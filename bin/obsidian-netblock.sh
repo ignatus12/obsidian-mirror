@@ -65,6 +65,7 @@ netns_setup() {
     [ -z "$IFACE" ] && { warn "no default route / interface; logging only"; return 1; }
     command -v ip >/dev/null 2>&1 || { warn "iproute2 missing; logging only"; return 1; }
 
+    mkdir -p /var/run/netns 2>/dev/null
     ip netns add "$NS" 2>/dev/null || { warn "could not create netns; logging only"; return 1; }
     ip link add "$VH" type veth peer name "$VI" 2>/dev/null || { warn "veth create failed; logging only"; ip netns del "$NS" 2>/dev/null; return 1; }
     ip link set "$VI" netns "$NS" 2>/dev/null
@@ -174,13 +175,15 @@ stat_app() {
     fi
     # Layer 3 (network deny-list) status
     if nft list table inet "$TBL" >/dev/null 2>&1; then
-        echo "HARDEN_OBSIDIAN=2 : ACTIVE (deny-list table present)"
+        echo "HARDEN_OBSIDIAN=2 : ACTIVE (enforcing deny-list)"
         EG=$(nft list chain inet "$TBL" egress 2>/dev/null | awk '/packets/{p=$2} END{print p+0}')
         IN=$(nft list chain inet "$TBL" ingress 2>/dev/null | awk '/packets/{p=$2} END{print p+0}')
         echo "Red-flag OUTGOING drops : ${EG:-0} packets"
         echo "Red-flag INCOMING drops : ${IN:-0} packets"
+    elif [ -f "$SCANDIR/$KEY.prior.log" ] || [ -f "$SCANDIR/$KEY.nft" ] || [ -f "$SCANDIR/$KEY.log" ]; then
+        echo "HARDEN_OBSIDIAN=2 : LEARNED (network isolated on last run; set OBSIDIAN_DENY_NET=1 to enforce)"
     else
-        echo "HARDEN_OBSIDIAN=2 : NOT ACTIVE"
+        echo "HARDEN_OBSIDIAN=2 : NOT ACTIVE (never run under HARDEN=2)"
     fi
     if [ ! -f "$SCANDIR/$KEY.log" ]; then
         echo "Learned traffic log : none (run OBSIDIAN_HARDEN=2 once to learn)"

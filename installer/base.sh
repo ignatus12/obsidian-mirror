@@ -2338,6 +2338,15 @@ if [ -f "$FONTS_CONF" ] && [ -d /usr/share/fonts ]; then
     export FONTCONFIG_FILE="$FONTS_CONF"
 fi
 
+# Layer 2 (HARDEN=1 / paranoid): point the hardening stage at the per-app
+# profile built by `obsidian --profile build`, if one exists.
+if [ "${OBSIDIAN_HARDEN:-}" = "1" ] || [ "${OBSIDIAN_HARDEN:-}" = "paranoid" ]; then
+    _pp="${XDG_CONFIG_HOME:-$HOME/.config}/obsidian/profiles/$OBSIDIAN_APPKEY.profile"
+    [ -f "$_pp" ] || _pp="/etc/obsidian/profiles/$OBSIDIAN_APPKEY.profile"
+    [ -f "$_pp" ] || _pp="$OBSIDIAN_DIR/var/profiles/$OBSIDIAN_APPKEY.profile"
+    [ -f "$_pp" ] && export OBSIDIAN_HARDEN_PROFILE="$_pp"
+fi
+
 # Final stage. "$@" still holds the caller argv, one element per
 # argument, handed to obsidian-inner unflattened.
 exec unshare --user --map-user=1000 --map-group=1000 "$INNER_STAGE" "$@"
@@ -3000,6 +3009,7 @@ OBSIDIAN_PAYLOAD_AUDIT
 chmod 755 "$BINDIR/obsidian-audit"
 ok "bin/obsidian-audit"
 
+mkdir -p "$FAKEROOT/fonts"
 cat > "$FAKEROOT/fonts/fonts.conf" <<'OBSIDIAN_PAYLOAD_FONTS_CONF'
 <?xml version="1.0"?>
 <!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">

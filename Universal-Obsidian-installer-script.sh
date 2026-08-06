@@ -5248,6 +5248,15 @@ if [ -f "$FONTS_CONF" ] && [ -d /usr/share/fonts ]; then
     export FONTCONFIG_FILE="$FONTS_CONF"
 fi
 
+# Layer 2 (HARDEN=1 / paranoid): point the hardening stage at the per-app
+# profile built by `obsidian --profile build`, if one exists.
+if [ "${OBSIDIAN_HARDEN:-}" = "1" ] || [ "${OBSIDIAN_HARDEN:-}" = "paranoid" ]; then
+    _pp="${XDG_CONFIG_HOME:-$HOME/.config}/obsidian/profiles/$OBSIDIAN_APPKEY.profile"
+    [ -f "$_pp" ] || _pp="/etc/obsidian/profiles/$OBSIDIAN_APPKEY.profile"
+    [ -f "$_pp" ] || _pp="$OBSIDIAN_DIR/var/profiles/$OBSIDIAN_APPKEY.profile"
+    [ -f "$_pp" ] && export OBSIDIAN_HARDEN_PROFILE="$_pp"
+fi
+
 # Final stage. "$@" still holds the caller argv, one element per
 # argument, handed to obsidian-inner unflattened.
 exec unshare --user --map-user=1000 --map-group=1000 "$INNER_STAGE" "$@"
@@ -6338,7 +6347,15 @@ stat_app() {
     echo "ALLOW_BLUETOOTH : 0  (hard-blocked in Layer 3)"
     # Layer 2 (strict boundary) status
     PROFILE=""
-    for p in "/etc/obsidian/profiles/$KEY" "$OBSIDIAN_DIR/var/profiles/$KEY" "$SCANDIR/../profiles/$KEY"; do
+    for p in \
+        "${XDG_CONFIG_HOME:-$HOME/.config}/obsidian/profiles/$KEY.profile" \
+        "${XDG_CONFIG_HOME:-$HOME/.config}/obsidian/profiles/$KEY" \
+        "/etc/obsidian/profiles/$KEY.profile" \
+        "/etc/obsidian/profiles/$KEY" \
+        "$OBSIDIAN_DIR/var/profiles/$KEY.profile" \
+        "$OBSIDIAN_DIR/var/profiles/$KEY" \
+        "$SCANDIR/../profiles/$KEY.profile" \
+        "$SCANDIR/../profiles/$KEY"; do
         [ -f "$p" ] && PROFILE="$p"
     done
     if [ -n "$PROFILE" ]; then
@@ -6414,7 +6431,7 @@ run_app() {
         warn "enforcement unavailable; running with logging only"
         HARDEN_OBSIDIAN=1 "$SCANNER" -k "$KEY" -- $APP &
         SC_PID=$!
-        HARDEN_OBSIDIAN=1 obsidian $APP
+        env -u OBSIDIAN_HARDEN OBSIDIAN_HARDEN=1 obsidian $APP
         kill "$SC_PID" 2>/dev/null; kill -9 "$SC_PID" 2>/dev/null
         return 0
     fi
@@ -6437,8 +6454,9 @@ run_app() {
         [ -f "$PRIOR" ] && apply_rules "$KEY"
     fi
 
-    # launch the app inside the netns, through obsidian (HARDEN=1)
-    HARDEN_OBSIDIAN=1 ip netns exec "$NS" obsidian $APP
+    # launch the app inside the netns, through obsidian (HARDEN=1).
+    # env -u guarantees the inner launcher can never re-enter the HARDEN=2 path.
+    env -u OBSIDIAN_HARDEN OBSIDIAN_HARDEN=1 ip netns exec "$NS" obsidian $APP
     APP_RC=$?
 
     kill "$CAP_PID" 2>/dev/null; kill -9 "$CAP_PID" 2>/dev/null
@@ -7076,6 +7094,7 @@ OBSIDIAN_PAYLOAD_AUDIT
 chmod 755 "$BINDIR/obsidian-audit"
 ok "bin/obsidian-audit"
 
+mkdir -p "$FAKEROOT/fonts"
 cat > "$FAKEROOT/fonts/fonts.conf" <<'OBSIDIAN_PAYLOAD_FONTS_CONF'
 <?xml version="1.0"?>
 <!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">

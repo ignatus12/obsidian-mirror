@@ -156,7 +156,15 @@ stat_app() {
     echo "ALLOW_BLUETOOTH : 0  (hard-blocked in Layer 3)"
     # Layer 2 (strict boundary) status
     PROFILE=""
-    for p in "/etc/obsidian/profiles/$KEY" "$OBSIDIAN_DIR/var/profiles/$KEY" "$SCANDIR/../profiles/$KEY"; do
+    for p in \
+        "${XDG_CONFIG_HOME:-$HOME/.config}/obsidian/profiles/$KEY.profile" \
+        "${XDG_CONFIG_HOME:-$HOME/.config}/obsidian/profiles/$KEY" \
+        "/etc/obsidian/profiles/$KEY.profile" \
+        "/etc/obsidian/profiles/$KEY" \
+        "$OBSIDIAN_DIR/var/profiles/$KEY.profile" \
+        "$OBSIDIAN_DIR/var/profiles/$KEY" \
+        "$SCANDIR/../profiles/$KEY.profile" \
+        "$SCANDIR/../profiles/$KEY"; do
         [ -f "$p" ] && PROFILE="$p"
     done
     if [ -n "$PROFILE" ]; then
@@ -232,7 +240,7 @@ run_app() {
         warn "enforcement unavailable; running with logging only"
         HARDEN_OBSIDIAN=1 "$SCANNER" -k "$KEY" -- $APP &
         SC_PID=$!
-        HARDEN_OBSIDIAN=1 obsidian $APP
+        env -u OBSIDIAN_HARDEN OBSIDIAN_HARDEN=1 obsidian $APP
         kill "$SC_PID" 2>/dev/null; kill -9 "$SC_PID" 2>/dev/null
         return 0
     fi
@@ -255,8 +263,9 @@ run_app() {
         [ -f "$PRIOR" ] && apply_rules "$KEY"
     fi
 
-    # launch the app inside the netns, through obsidian (HARDEN=1)
-    HARDEN_OBSIDIAN=1 ip netns exec "$NS" obsidian $APP
+    # launch the app inside the netns, through obsidian (HARDEN=1).
+    # env -u guarantees the inner launcher can never re-enter the HARDEN=2 path.
+    env -u OBSIDIAN_HARDEN OBSIDIAN_HARDEN=1 ip netns exec "$NS" obsidian $APP
     APP_RC=$?
 
     kill "$CAP_PID" 2>/dev/null; kill -9 "$CAP_PID" 2>/dev/null

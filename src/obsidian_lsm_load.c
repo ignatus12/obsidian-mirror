@@ -203,4 +203,3 @@ int main(int argc, char **argv)
 	obsidian_lsm__destroy(skel);
 	return 0;
 }
-OBSIDIAN_EOF

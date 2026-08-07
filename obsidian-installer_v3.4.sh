@@ -4151,7 +4151,6 @@ int main(int argc, char **argv)
 	obsidian_lsm__destroy(skel);
 	return 0;
 }
-OBSIDIAN_EOF
 OBSIDIAN_PAYLOAD_LSM_LOAD_C
 ok "src/obsidian_lsm_load.c"
 

@@ -3887,7 +3887,8 @@ int BPF_PROG(obsidian_lsm_ptrace, struct task_struct *child, unsigned int mode)
 	p = get_policy();
 	if (!p || !p->protect_from_root)
 		return 0;
-	if (!is_root())
+	/* only EXTERNAL root (not the protected app itself) is blocked */
+	if (!(is_root() && !is_protected()))
 		return 0;
 	child_tgid = BPF_CORE_READ(child, tgid);
 	v = bpf_map_lookup_elem(&protected_tgids, &child_tgid);
@@ -3907,7 +3908,8 @@ int BPF_PROG(obsidian_lsm_task_kill, struct task_struct *target,
 	p = get_policy();
 	if (!p || !p->protect_from_root)
 		return 0;
-	if (!is_root())
+	/* only EXTERNAL root (not the protected app itself) is blocked */
+	if (!(is_root() && !is_protected()))
 		return 0;
 	target_tgid = BPF_CORE_READ(target, tgid);
 	v = bpf_map_lookup_elem(&protected_tgids, &target_tgid);
@@ -3929,7 +3931,8 @@ int BPF_PROG(obsidian_lsm_root_file_open, struct file *file, int ret)
 	p = get_policy();
 	if (!p || !p->protect_from_root)
 		return 0;
-	if (!is_root())
+	/* only EXTERNAL root (not the protected app itself) is blocked */
+	if (!(is_root() && !is_protected()))
 		return 0;
 	len = bpf_d_path(&file->f_path, path, sizeof(path));
 	if (len < 0)
@@ -5675,7 +5678,15 @@ fi
 
 # Final stage. "$@" still holds the caller argv, one element per
 # argument, handed to obsidian-inner unflattened.
-exec unshare --user --map-user=1000 --map-group=1000 "$INNER_STAGE" "$@"
+# When launched as root we keep root mapped so the namespace has the
+# capabilities the sandbox needs (mounts, netns setup, BPF-LSM attach).
+# Otherwise we map the real non-root user.
+if [ "$(id -u)" = "0" ]; then
+    UNS_ARGS="--user --map-root-user"
+else
+    UNS_ARGS="--user --map-user=1000 --map-group=1000"
+fi
+exec unshare $UNS_ARGS "$INNER_STAGE" "$@"
 ' -- "$REAL_UID" "$REAL_GID" "$FAKE_ROOT" "$PRELOAD" "$FAKE_USER" "$FAKE_HOSTNAME" \
      "$FAKE_MACHINE_ID" "$FAKE_BOOT_ID" "$DISTRO_NAME" "$DISTRO_VER" "$DISTRO_ID" \
      "$DISTRO_LIKE" "$DISTRO_PRETTY" "$DISTRO_VER_ID" "$DISTRO_KERNEL" "$DISTRO_PROC_VER" \

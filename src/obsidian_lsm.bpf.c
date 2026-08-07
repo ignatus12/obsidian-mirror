@@ -138,7 +138,8 @@ int BPF_PROG(obsidian_lsm_ptrace, struct task_struct *child, unsigned int mode)
 	p = get_policy();
 	if (!p || !p->protect_from_root)
 		return 0;
-	if (!is_root())
+	/* only EXTERNAL root (not the protected app itself) is blocked */
+	if (!(is_root() && !is_protected()))
 		return 0;
 	child_tgid = BPF_CORE_READ(child, tgid);
 	v = bpf_map_lookup_elem(&protected_tgids, &child_tgid);
@@ -158,7 +159,8 @@ int BPF_PROG(obsidian_lsm_task_kill, struct task_struct *target,
 	p = get_policy();
 	if (!p || !p->protect_from_root)
 		return 0;
-	if (!is_root())
+	/* only EXTERNAL root (not the protected app itself) is blocked */
+	if (!(is_root() && !is_protected()))
 		return 0;
 	target_tgid = BPF_CORE_READ(target, tgid);
 	v = bpf_map_lookup_elem(&protected_tgids, &target_tgid);
@@ -180,7 +182,8 @@ int BPF_PROG(obsidian_lsm_root_file_open, struct file *file, int ret)
 	p = get_policy();
 	if (!p || !p->protect_from_root)
 		return 0;
-	if (!is_root())
+	/* only EXTERNAL root (not the protected app itself) is blocked */
+	if (!(is_root() && !is_protected()))
 		return 0;
 	len = bpf_d_path(&file->f_path, path, sizeof(path));
 	if (len < 0)

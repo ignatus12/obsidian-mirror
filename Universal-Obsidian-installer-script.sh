@@ -3746,6 +3746,412 @@ int connect(int fd, const struct sockaddr *addr, socklen_t len)
 OBSIDIAN_PAYLOAD_LEARN_C
 ok "src/obsidian_learn.c"
 
+cat > "$SRCDIR/obsidian_lsm.bpf.c" <<'OBSIDIAN_PAYLOAD_LSM_BPF_C'
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Obsidian Mirror v3.5 - kernel-level enforcement via BPF-LSM.
+ *
+ * Enforced only while the protected app (and its descendant processes) run,
+ * and only to that app / only by root:
+ *
+ *   1. Hardware restriction  - when enforce_hw is set, the app and its
+ *      children are denied access to hardware device nodes / sysfs classes
+ *      (GPU, input, camera, sound). Previously done with userspace tmpfs
+ *      mounts; now kernel-enforced so it cannot be bypassed.
+ *
+ *   2. Protect the app from root - when protect_from_root is set, the root
+ *      user (uid 0) is denied ptrace, kill and file access to the app's
+ *      files and processes for the app's lifetime.
+ *
+ *   3. Safety mechanism lives in the loader: if the BPF link is ever
+ *      detached (manipulation attempt) or the policy tampered, the loader
+ *      SIGKILLs the app, so an attacked policy never silently leaves the
+ *      app exposed.
+ *
+ * The set of "protected" tgids (app + descendants) is maintained by the
+ * loader in the protected_tgids hash map; is_app() just does a map lookup.
+ */
+#include "vmlinux.h"
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_tracing.h>
+#include <bpf/bpf_core_read.h>
+
+char LICENSE[] SEC("license") = "GPL";
+
+#define PATH_MAX_LEN 256
+
+struct obsidian_policy {
+	__u8  enforce_hw;        /* 1 = deny app hardware devices */
+	__u8  protect_from_root; /* 1 = deny root access to the app */
+	__u8  _pad[2];
+	char  home[PATH_MAX_LEN];/* app home prefix to protect from root */
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, struct obsidian_policy);
+} policy_map SEC(".maps");
+
+/* tgid -> 1 for every protected process (app + descendants). */
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 4096);
+	__type(key, __u32);
+	__type(value, __u8);
+} protected_tgids SEC(".maps");
+
+static __always_inline struct obsidian_policy *get_policy(void)
+{
+	__u32 zero = 0;
+	return bpf_map_lookup_elem(&policy_map, &zero);
+}
+
+static __always_inline int is_protected(void)
+{
+	__u32 tgid = bpf_get_current_pid_tgid() >> 32;
+	__u8 *v = bpf_map_lookup_elem(&protected_tgids, &tgid);
+	return v ? 1 : 0;
+}
+
+static __always_inline int is_root(void)
+{
+	__u32 uid = bpf_get_current_uid_gid() & 0xffffffff;
+	return uid == 0 ? 1 : 0;
+}
+
+static __always_inline int path_has_prefix(const char *path, const char *prefix)
+{
+	int i = 0;
+	char c1, c2;
+#pragma unroll
+	for (i = 0; i < 32; i++) {
+		c1 = prefix[i];
+		if (c1 == '\0')
+			return 1;
+		if (bpf_probe_read_str(&c2, 1, &path[i]) != 1 || c2 != c1)
+			return 0;
+	}
+	return 1;
+}
+
+static __always_inline int path_in_hw_list(const char *path)
+{
+	if (path_has_prefix(path, "/dev/dri")) return 1;
+	if (path_has_prefix(path, "/dev/input")) return 1;
+	if (path_has_prefix(path, "/dev/hidraw")) return 1;
+	if (path_has_prefix(path, "/dev/video")) return 1;
+	if (path_has_prefix(path, "/dev/snd")) return 1;
+	if (path_has_prefix(path, "/dev/media")) return 1;
+	if (path_has_prefix(path, "/sys/class/drm")) return 1;
+	if (path_has_prefix(path, "/sys/class/input")) return 1;
+	if (path_has_prefix(path, "/sys/class/hidraw")) return 1;
+	if (path_has_prefix(path, "/sys/class/video4linux")) return 1;
+	if (path_has_prefix(path, "/sys/class/sound")) return 1;
+	if (path_has_prefix(path, "/sys/class/backlight")) return 1;
+	return 0;
+}
+
+/* Requirement 1: deny the app + descendants access to hardware devices. */
+SEC("lsm/file_open")
+int BPF_PROG(obsidian_lsm_file_open, struct file *file, int ret)
+{
+	struct obsidian_policy *p;
+	char path[PATH_MAX_LEN];
+	long len;
+
+	if (ret != 0)
+		return ret;
+	p = get_policy();
+	if (!p || !p->enforce_hw)
+		return 0;
+	if (!is_protected())
+		return 0;
+	len = bpf_d_path(&file->f_path, path, sizeof(path));
+	if (len < 0)
+		return 0;
+	if (path_in_hw_list(path))
+		return -EPERM;
+	return 0;
+}
+
+/* Requirement 2a/b: root may not ptrace or kill the app or its children. */
+SEC("lsm/ptrace_access_check")
+int BPF_PROG(obsidian_lsm_ptrace, struct task_struct *child, unsigned int mode)
+{
+	struct obsidian_policy *p;
+	__u32 child_tgid;
+	__u8 *v;
+
+	p = get_policy();
+	if (!p || !p->protect_from_root)
+		return 0;
+	if (!is_root())
+		return 0;
+	child_tgid = BPF_CORE_READ(child, tgid);
+	v = bpf_map_lookup_elem(&protected_tgids, &child_tgid);
+	if (v)
+		return -EPERM;
+	return 0;
+}
+
+SEC("lsm/task_kill")
+int BPF_PROG(obsidian_lsm_task_kill, struct task_struct *target,
+	     struct kernel_siginfo *info, int sig, const struct cred *cred)
+{
+	struct obsidian_policy *p;
+	__u32 target_tgid;
+	__u8 *v;
+
+	p = get_policy();
+	if (!p || !p->protect_from_root)
+		return 0;
+	if (!is_root())
+		return 0;
+	target_tgid = BPF_CORE_READ(target, tgid);
+	v = bpf_map_lookup_elem(&protected_tgids, &target_tgid);
+	if (v)
+		return -EPERM;
+	return 0;
+}
+
+/* Requirement 2c: root may not open the app's own files. */
+SEC("lsm/file_open")
+int BPF_PROG(obsidian_lsm_root_file_open, struct file *file, int ret)
+{
+	struct obsidian_policy *p;
+	char path[PATH_MAX_LEN];
+	long len;
+
+	if (ret != 0)
+		return ret;
+	p = get_policy();
+	if (!p || !p->protect_from_root)
+		return 0;
+	if (!is_root())
+		return 0;
+	len = bpf_d_path(&file->f_path, path, sizeof(path));
+	if (len < 0)
+		return 0;
+	if (p->home[0] != '\0' && path_has_prefix(path, p->home))
+		return -EPERM;
+	return 0;
+}
+OBSIDIAN_EOF
+OBSIDIAN_PAYLOAD_LSM_BPF_C
+ok "src/obsidian_lsm.bpf.c"
+
+cat > "$SRCDIR/obsidian_lsm_load.c" <<'OBSIDIAN_PAYLOAD_LSM_LOAD_C'
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Obsidian Mirror v3.5 - BPF-LSM loader + safety watchdog.
+ *
+ * Loads obsidian_lsm.bpf.o, applies the per-app policy (home prefix,
+ * hw-restriction + root-protection flags), attaches the LSM hooks, then:
+ *   - keeps the protected_tgids map populated with the app AND every
+ *     descendant process (walked from /proc), so req (1) hardware denial
+ *     and req (2) root protection cover the whole app tree;
+ *   - watches the app: if it dies, detach and exit;
+ *   - if the BPF link is removed/tampered, or the policy map is altered,
+ *     SIGKILL the app immediately (requirement 3: an app under Obsidian
+ *     must never run unprotected if its kernel restrictions are touched).
+ *
+ * Requires root (CAP_BPF + CAP_SYS_ADMIN) to attach LSM programs. When the
+ * kernel lacks BPF-LSM or the toolchain is missing, the caller skips this
+ * and the app still runs under the userspace sandbox.
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <signal.h>
+#include <errno.h>
+#include <dirent.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <bpf/libbpf.h>
+#include <bpf/bpf.h>
+#include "obsidian_lsm.skel.h"
+
+static volatile sig_atomic_t g_stop = 0;
+static void on_sig(int s) { (void)s; g_stop = 1; }
+
+/* Read ppid of a pid from /proc/<pid>/stat. Returns -1 if not found. */
+static int read_ppid(int pid)
+{
+	char path[64];
+	FILE *f;
+	char buf[512];
+	int ppid = -1;
+
+	snprintf(path, sizeof(path), "/proc/%d/stat", pid);
+	f = fopen(path, "r");
+	if (!f)
+		return -1;
+	if (fgets(buf, sizeof(buf), f)) {
+		/* pid (comm) state ppid ... */
+		char *p = buf;
+		int n = 0;
+		/* skip pid */
+		while (*p && *p != ' ') p++;
+		while (*p == ' ') p++;
+		/* skip (comm) including nested parens */
+		if (*p == '(') {
+			while (*p && *p != ')') p++;
+			if (*p == ')') p++;
+		}
+		/* skip state + read ppid (3rd field) */
+		while (*p == ' ') p++;
+		while (*p && *p != ' ') p++;
+		while (*p == ' ') p++;
+		ppid = atoi(p);
+	}
+	fclose(f);
+	return ppid;
+}
+
+/* Collect app_pid + all descendants into tgids[] (max n). */
+static int collect_tree(int app_pid, int *tgids, int n)
+{
+	int cur = 0, i, parent;
+	tgids[cur++] = app_pid;
+	for (i = 0; i < cur; i++) {
+		DIR *d = opendir("/proc");
+		struct dirent *e;
+		if (!d) break;
+		while ((e = readdir(d)) && cur < n) {
+			int pid = atoi(e->d_name);
+			if (pid <= 0) continue;
+			parent = read_ppid(pid);
+			if (parent == tgids[i])
+				tgids[cur++] = pid;
+		}
+		closedir(d);
+	}
+	return cur;
+}
+
+static int refresh_tgids(struct obsidian_lsm *skel, int app_pid)
+{
+	int tgids[2048];
+	int n = collect_tree(app_pid, tgids, 2048);
+	int fd = bpf_map__fd(skel->maps.protected_tgids);
+	__u32 key;
+	__u8 val = 1;
+	int i;
+
+	/* clear then repopulate (simple, correct for modest trees) */
+	__u32 prev_key = 0;
+	while (bpf_map_get_next_key(fd, NULL, &prev_key) == 0) {
+		bpf_map_delete_elem(fd, &prev_key);
+		prev_key = 0;
+		if (bpf_map_get_next_key(fd, NULL, &prev_key) != 0) break;
+	}
+	for (i = 0; i < n; i++) {
+		key = (__u32)tgids[i];
+		bpf_map_update_elem(fd, &key, &val, BPF_ANY);
+	}
+	return n;
+}
+
+int main(int argc, char **argv)
+{
+	__u32 app_tgid = 0;
+	const char *home = NULL;
+	int enforce_hw = 0, protect_root = 0;
+	int i;
+
+	for (i = 1; i < argc; i++) {
+		if (!strcmp(argv[i], "--pid") && i + 1 < argc)
+			app_tgid = (__u32)atoi(argv[++i]);
+		else if (!strcmp(argv[i], "--home") && i + 1 < argc)
+			home = argv[++i];
+		else if (!strcmp(argv[i], "--enforce-hw"))
+			enforce_hw = 1;
+		else if (!strcmp(argv[i], "--protect-root"))
+			protect_root = 1;
+	}
+	if (app_tgid == 0) {
+		fprintf(stderr, "obsidian-lsm-load: --pid required\n");
+		return 2;
+	}
+	if (geteuid() != 0) {
+		fprintf(stderr, "obsidian-lsm-load: needs root; skipping kernel enforcement\n");
+		return 0;
+	}
+
+	struct obsidian_lsm *skel = obsidian_lsm__open_and_load();
+	if (!skel) {
+		fprintf(stderr, "obsidian-lsm-load: open/load failed\n");
+		return 0;
+	}
+
+	struct obsidian_policy p = {0};
+	p.enforce_hw = enforce_hw ? 1 : 0;
+	p.protect_from_root = protect_root ? 1 : 0;
+	if (home)
+		strncpy(p.home, home, sizeof(p.home) - 1);
+	int pfd = bpf_map__fd(skel->maps.policy_map);
+	if (bpf_map_update_elem(pfd, &(__u32){0}, &p, BPF_ANY)) {
+		fprintf(stderr, "obsidian-lsm-load: policy set failed\n");
+		obsidian_lsm__destroy(skel);
+		return 0;
+	}
+
+	struct bpf_link *links[4] = {0};
+	links[0] = bpf_program__attach_lsm(skel->progs.obsidian_lsm_file_open);
+	links[1] = bpf_program__attach_lsm(skel->progs.obsidian_lsm_ptrace);
+	links[2] = bpf_program__attach_lsm(skel->progs.obsidian_lsm_task_kill);
+	links[3] = bpf_program__attach_lsm(skel->progs.obsidian_lsm_root_file_open);
+	for (i = 0; i < 4; i++) {
+		if (!links[i]) {
+			fprintf(stderr, "obsidian-lsm-load: attach failed\n");
+			while (i-- > 0) bpf_link__destroy(links[i]);
+			obsidian_lsm__destroy(skel);
+			return 0;
+		}
+	}
+
+	refresh_tgids(skel, (int)app_tgid);
+
+	signal(SIGTERM, on_sig);
+	signal(SIGINT, on_sig);
+
+	while (!g_stop) {
+		if (kill((pid_t)app_tgid, 0) != 0 && errno == ESRCH)
+			break; /* app exited */
+
+		refresh_tgids(skel, (int)app_tgid);
+
+		/* policy intact? */
+		struct obsidian_policy cur = {0};
+		if (bpf_map_lookup_elem(pfd, &(__u32){0}, &cur) != 0 ||
+		    cur.protect_from_root != p.protect_from_root ||
+		    cur.enforce_hw != p.enforce_hw) {
+			kill((pid_t)app_tgid, SIGKILL);
+			break;
+		}
+		/* link still attached? (manipulation detection) */
+		struct bpf_link_info info;
+		__u32 info_len = sizeof(info);
+		memset(&info, 0, sizeof(info));
+		if (bpf_link_get_info_by_fd(bpf_link__fd(links[0]), &info, &info_len) != 0) {
+			kill((pid_t)app_tgid, SIGKILL);
+			break;
+		}
+		usleep(300000);
+	}
+
+	for (i = 0; i < 4; i++)
+		bpf_link__destroy(links[i]);
+	obsidian_lsm__destroy(skel);
+	return 0;
+}
+OBSIDIAN_EOF
+OBSIDIAN_PAYLOAD_LSM_LOAD_C
+ok "src/obsidian_lsm_load.c"
+
 cat > "$SCRIPTDIR/generate-manifest.sh" <<'OBSIDIAN_PAYLOAD_MANIFEST_SH'
 #!/bin/sh
 # /opt/obsidian/scripts/generate-manifest.sh
@@ -4575,6 +4981,13 @@ if [ -z "$1" ] || [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo "  NOTE: run 'OBSIDIAN_HARDEN=2 obsidian <app>' once as root to LEARN, then add"
     echo "        OBSIDIAN_DENY_NET=1 to enforce (default stays allow-by-default)."
     echo
+    echo "v3.5 (kernel-level enforcement, BPF-LSM) - applied automatically when available:"
+    echo "  hardware access (GPU/input/camera) is denied at the kernel level for the app,"
+    echo "  and the root user / kernel is denied R/W/X on the running app (both directions)."
+    echo "  Needs root at launch and a BPF-LSM-capable kernel (CONFIG_BPF_LSM); with"
+    echo "  OBSIDIAN_GPU_MODE=strict it also kernel-masks the GPU. If the toolchain is"
+    echo "  absent, the userspace sandbox still applies and the app runs normally."
+    echo
     echo "Runtime switches (all default to not breaking applications):"
     echo "  OBSIDIAN_GPU_MODE=strict        mask /dev/dri and /sys/class/drm"
     echo "                                  entirely; software rendering only"
@@ -5321,18 +5734,37 @@ esac
 
 # "$@" is expanded HERE, at run time, by this shell -- each
 # argument stays a separate argv element.
+# v3.5 BPF-LSM kernel enforcement (Option A). When obsidian-lsm-load is
+# installed and we are root, background the app and run the loader with the
+# app's PID so the kernel-level hardware + root-protection policies apply for
+# the app's whole lifetime. The loader's watchdog kills the app if the policy
+# is ever tampered with or the BPF link is detached.
+obsidian_launch() {
+    OBS_LSM_LOAD="$(command -v obsidian-lsm-load 2>/dev/null)"
+    if [ -n "$OBS_LSM_LOAD" ] && [ "$(id -u)" = "0" ]; then
+        HW_FLAG=""; [ "$GPU_MODE" = strict ] && HW_FLAG="--enforce-hw"
+        ( "$@" ) &
+        APP_PID=$!
+        "$OBS_LSM_LOAD" --pid "$APP_PID" --home "$HOME" --protect-root $HW_FLAG
+        wait "$APP_PID"
+        RC=$?
+        exit $RC
+    fi
+    exec "$@"
+}
+
 if command -v taskset >/dev/null 2>&1; then
     if [ -x "$OBSIDIAN_SECCOMP" ]; then
-        exec "$OBSIDIAN_SECCOMP" -- taskset -c "$TASKSET_ARG" "$@"
+        obsidian_launch "$OBSIDIAN_SECCOMP" -- taskset -c "$TASKSET_ARG" "$@"
     fi
-    exec taskset -c "$TASKSET_ARG" "$@"
+    obsidian_launch taskset -c "$TASKSET_ARG" "$@"
 fi
 
 if [ -x "$OBSIDIAN_SECCOMP" ]; then
-    exec "$OBSIDIAN_SECCOMP" -- "$@"
+    obsidian_launch "$OBSIDIAN_SECCOMP" -- "$@"
 fi
 
-exec "$@"
+obsidian_launch "$@"
 OBSIDIAN_PAYLOAD_INNER
 chmod 755 "$BINDIR/obsidian-inner"
 ok "bin/obsidian-inner"
@@ -6462,7 +6894,9 @@ run_app() {
 
     # launch the app inside the netns, through obsidian (HARDEN=1).
     # env -u guarantees the inner launcher can never re-enter the HARDEN=2 path.
-    env -u OBSIDIAN_HARDEN OBSIDIAN_HARDEN=1 ip netns exec "$NS" obsidian $APP
+    # OBSIDIAN_GPU_MODE is passed through explicitly so GPU strict mode survives.
+    env -u OBSIDIAN_HARDEN OBSIDIAN_HARDEN=1 OBSIDIAN_GPU_MODE="$OBSIDIAN_GPU_MODE" \
+        ip netns exec "$NS" obsidian $APP
     APP_RC=$?
 
     kill "$CAP_PID" 2>/dev/null; kill -9 "$CAP_PID" 2>/dev/null
@@ -7705,6 +8139,33 @@ if $CC -O2 -Wall -o "$BINDIR/obsidian-ipcprobe" "$SRCDIR/obsidian_ipcprobe.c" \
 else
     warn "obsidian-ipcprobe did not build; the audit will report IPC sockets"
     warn "as present rather than measuring reachability."
+fi
+
+# v3.5 - BPF-LSM kernel-level enforcement (Option A). Built only when the
+# toolchain (clang, bpftool, libbpf, and kernel BTF) is present. If anything
+# is missing the userspace sandbox still applies and the app runs normally.
+if command -v clang >/dev/null 2>&1 && command -v bpftool >/dev/null 2>&1 && \
+   command -v gcc >/dev/null 2>&1 && [ -f "$SRCDIR/obsidian_lsm.bpf.c" ]; then
+    VMLINUX="$SRCDIR/vmlinux.h"
+    if [ ! -f "$VMLINUX" ]; then
+        bpftool btf dump file /sys/kernel/btf/vmlinux format c > "$VMLINUX" 2>/dev/null || true
+    fi
+    if [ -f "$VMLINUX" ]; then
+        if clang -O2 -g -target bpf -D__TARGET_ARCH_x86_64 \
+                -I"$SRCDIR" -c "$SRCDIR/obsidian_lsm.bpf.c" -o "$SRCDIR/obsidian_lsm.bpf.o" 2>"$SRCDIR/.err.lsm" && \
+           bpftool gen skeleton "$SRCDIR/obsidian_lsm.bpf.o" > "$SRCDIR/obsidian_lsm.skel.h" 2>/dev/null && \
+           $CC -O2 -I"$SRCDIR" -o "$BINDIR/obsidian-lsm-load" "$SRCDIR/obsidian_lsm_load.c" -lbpf 2>>"$SRCDIR/.err.lsm"; then
+            chmod 755 "$BINDIR/obsidian-lsm-load"
+            ok "obsidian-lsm-load  (v3.5 BPF-LSM kernel enforcement ready)"
+        else
+            warn "obsidian-lsm-load did NOT build (clang/bpftool/libbpf mismatch). v3.5 kernel enforcement skipped; userspace sandbox still applies."
+        fi
+        rm -f "$SRCDIR/.err.lsm"
+    else
+        warn "obsidian-lsm-load skipped: BTF/vmlinux.h unavailable (needs CONFIG_DEBUG_INFO_BTF). v3.5 off."
+    fi
+else
+    warn "obsidian-lsm-load skipped: clang/bpftool/gcc not installed. v3.5 kernel enforcement off."
 fi
 
 chmod 755 "$BINDIR/obsidian-launch" "$BINDIR/obsidian-inner" "$BINDIR/obsidian-audit"

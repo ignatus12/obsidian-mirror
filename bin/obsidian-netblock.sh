@@ -268,7 +268,9 @@ run_app() {
 
     # launch the app inside the netns, through obsidian (HARDEN=1).
     # env -u guarantees the inner launcher can never re-enter the HARDEN=2 path.
-    env -u OBSIDIAN_HARDEN OBSIDIAN_HARDEN=1 ip netns exec "$NS" obsidian $APP
+    # OBSIDIAN_GPU_MODE is passed through explicitly so GPU strict mode survives.
+    env -u OBSIDIAN_HARDEN OBSIDIAN_HARDEN=1 OBSIDIAN_GPU_MODE="$OBSIDIAN_GPU_MODE" \
+        ip netns exec "$NS" obsidian $APP
     APP_RC=$?
 
     kill "$CAP_PID" 2>/dev/null; kill -9 "$CAP_PID" 2>/dev/null

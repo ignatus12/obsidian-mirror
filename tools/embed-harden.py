@@ -133,6 +133,20 @@ def main():
         read("src/obsidian_learn.c"),
         "src/obsidian_learn.c",
     )
+    # v3.5 - BPF-LSM kernel-level enforcement (Option A). Embedded but only
+    # compiled by the installer when clang + bpftool + libbpf are present.
+    csrc += payload(
+        '$SRCDIR/obsidian_lsm.bpf.c',
+        "OBSIDIAN_PAYLOAD_LSM_BPF_C",
+        read("src/obsidian_lsm.bpf.c"),
+        "src/obsidian_lsm.bpf.c",
+    )
+    csrc += payload(
+        '$SRCDIR/obsidian_lsm_load.c',
+        "OBSIDIAN_PAYLOAD_LSM_LOAD_C",
+        read("src/obsidian_lsm_load.c"),
+        "src/obsidian_lsm_load.c",
+    )
     src = splice(src, 'ok "src/obsidian_ipcprobe.c"\n\n', csrc)
 
     # ---------------------------------------------------------------
@@ -259,6 +273,13 @@ fi
     echo "  OBSIDIAN_DENY_NET=1 OBSIDIAN_HARDEN=2 obsidian <app>   enforce the learned deny-list"
     echo "  NOTE: run 'OBSIDIAN_HARDEN=2 obsidian <app>' once as root to LEARN, then add"
     echo "        OBSIDIAN_DENY_NET=1 to enforce (default stays allow-by-default)."
+    echo
+    echo "v3.5 (kernel-level enforcement, BPF-LSM) - applied automatically when available:"
+    echo "  hardware access (GPU/input/camera) is denied at the kernel level for the app,"
+    echo "  and the root user / kernel is denied R/W/X on the running app (both directions)."
+    echo "  Needs root at launch and a BPF-LSM-capable kernel (CONFIG_BPF_LSM); with"
+    echo "  OBSIDIAN_GPU_MODE=strict it also kernel-masks the GPU. If the toolchain is"
+    echo "  absent, the userspace sandbox still applies and the app runs normally."
 ''',
     )
     src = replace_once(

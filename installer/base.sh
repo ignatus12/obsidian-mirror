@@ -2388,18 +2388,37 @@ fi
 
 # "$@" is expanded HERE, at run time, by this shell -- each
 # argument stays a separate argv element.
+# v3.5 BPF-LSM kernel enforcement (Option A). When obsidian-lsm-load is
+# installed and we are root, background the app and run the loader with the
+# app's PID so the kernel-level hardware + root-protection policies apply for
+# the app's whole lifetime. The loader's watchdog kills the app if the policy
+# is ever tampered with or the BPF link is detached.
+obsidian_launch() {
+    OBS_LSM_LOAD="$(command -v obsidian-lsm-load 2>/dev/null)"
+    if [ -n "$OBS_LSM_LOAD" ] && [ "$(id -u)" = "0" ]; then
+        HW_FLAG=""; [ "$GPU_MODE" = strict ] && HW_FLAG="--enforce-hw"
+        ( "$@" ) &
+        APP_PID=$!
+        "$OBS_LSM_LOAD" --pid "$APP_PID" --home "$HOME" --protect-root $HW_FLAG
+        wait "$APP_PID"
+        RC=$?
+        exit $RC
+    fi
+    exec "$@"
+}
+
 if command -v taskset >/dev/null 2>&1; then
     if [ -x "$OBSIDIAN_SECCOMP" ]; then
-        exec "$OBSIDIAN_SECCOMP" -- taskset -c "$TASKSET_ARG" "$@"
+        obsidian_launch "$OBSIDIAN_SECCOMP" -- taskset -c "$TASKSET_ARG" "$@"
     fi
-    exec taskset -c "$TASKSET_ARG" "$@"
+    obsidian_launch taskset -c "$TASKSET_ARG" "$@"
 fi
 
 if [ -x "$OBSIDIAN_SECCOMP" ]; then
-    exec "$OBSIDIAN_SECCOMP" -- "$@"
+    obsidian_launch "$OBSIDIAN_SECCOMP" -- "$@"
 fi
 
-exec "$@"
+obsidian_launch "$@"
 OBSIDIAN_PAYLOAD_INNER
 chmod 755 "$BINDIR/obsidian-inner"
 ok "bin/obsidian-inner"
@@ -3492,6 +3511,33 @@ if $CC -O2 -Wall -o "$BINDIR/obsidian-ipcprobe" "$SRCDIR/obsidian_ipcprobe.c" \
 else
     warn "obsidian-ipcprobe did not build; the audit will report IPC sockets"
     warn "as present rather than measuring reachability."
+fi
+
+# v3.5 - BPF-LSM kernel-level enforcement (Option A). Built only when the
+# toolchain (clang, bpftool, libbpf, and kernel BTF) is present. If anything
+# is missing the userspace sandbox still applies and the app runs normally.
+if command -v clang >/dev/null 2>&1 && command -v bpftool >/dev/null 2>&1 && \
+   command -v gcc >/dev/null 2>&1 && [ -f "$SRCDIR/obsidian_lsm.bpf.c" ]; then
+    VMLINUX="$SRCDIR/vmlinux.h"
+    if [ ! -f "$VMLINUX" ]; then
+        bpftool btf dump file /sys/kernel/btf/vmlinux format c > "$VMLINUX" 2>/dev/null || true
+    fi
+    if [ -f "$VMLINUX" ]; then
+        if clang -O2 -g -target bpf -D__TARGET_ARCH_x86_64 \
+                -I"$SRCDIR" -c "$SRCDIR/obsidian_lsm.bpf.c" -o "$SRCDIR/obsidian_lsm.bpf.o" 2>"$SRCDIR/.err.lsm" && \
+           bpftool gen skeleton "$SRCDIR/obsidian_lsm.bpf.o" > "$SRCDIR/obsidian_lsm.skel.h" 2>/dev/null && \
+           $CC -O2 -I"$SRCDIR" -o "$BINDIR/obsidian-lsm-load" "$SRCDIR/obsidian_lsm_load.c" -lbpf 2>>"$SRCDIR/.err.lsm"; then
+            chmod 755 "$BINDIR/obsidian-lsm-load"
+            ok "obsidian-lsm-load  (v3.5 BPF-LSM kernel enforcement ready)"
+        else
+            warn "obsidian-lsm-load did NOT build (clang/bpftool/libbpf mismatch). v3.5 kernel enforcement skipped; userspace sandbox still applies."
+        fi
+        rm -f "$SRCDIR/.err.lsm"
+    else
+        warn "obsidian-lsm-load skipped: BTF/vmlinux.h unavailable (needs CONFIG_DEBUG_INFO_BTF). v3.5 off."
+    fi
+else
+    warn "obsidian-lsm-load skipped: clang/bpftool/gcc not installed. v3.5 kernel enforcement off."
 fi
 
 chmod 755 "$BINDIR/obsidian-launch" "$BINDIR/obsidian-inner" "$BINDIR/obsidian-audit"

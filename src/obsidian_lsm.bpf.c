@@ -20,12 +20,15 @@
  *      app exposed.
  *
  * The set of "protected" tgids (app + descendants) is maintained by the
- * loader in the protected_tgids hash map; is_app() just does a map lookup.
+ * loader in the protected_tgids hash map; is_protected() just does a lookup.
  */
 #include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_core_read.h>
+
+/* BPF programs have no errno.h; define the values we return. */
+#define EPERM 1
 
 char LICENSE[] SEC("license") = "GPL";
 
@@ -119,7 +122,7 @@ int BPF_PROG(obsidian_lsm_file_open, struct file *file, int ret)
 		return 0;
 	if (!is_protected())
 		return 0;
-	len = bpf_d_path(&file->f_path, path, sizeof(path));
+	len = bpf_d_path((struct path *)&file->f_path, path, sizeof(path));
 	if (len < 0)
 		return 0;
 	if (path_in_hw_list(path))
@@ -127,7 +130,7 @@ int BPF_PROG(obsidian_lsm_file_open, struct file *file, int ret)
 	return 0;
 }
 
-/* Requirement 2a/b: root may not ptrace or kill the app or its children. */
+/* Requirement 2a/b: external root may not ptrace or kill the app/children. */
 SEC("lsm/ptrace_access_check")
 int BPF_PROG(obsidian_lsm_ptrace, struct task_struct *child, unsigned int mode)
 {
@@ -136,10 +139,10 @@ int BPF_PROG(obsidian_lsm_ptrace, struct task_struct *child, unsigned int mode)
 	__u8 *v;
 
 	p = get_policy();
-	if (!p || !p->protect_from_root)
-		return 0;
 	/* only EXTERNAL root (not the protected app itself) is blocked */
 	if (!(is_root() && !is_protected()))
+		return 0;
+	if (!p || !p->protect_from_root)
 		return 0;
 	child_tgid = BPF_CORE_READ(child, tgid);
 	v = bpf_map_lookup_elem(&protected_tgids, &child_tgid);
@@ -157,10 +160,9 @@ int BPF_PROG(obsidian_lsm_task_kill, struct task_struct *target,
 	__u8 *v;
 
 	p = get_policy();
-	if (!p || !p->protect_from_root)
-		return 0;
-	/* only EXTERNAL root (not the protected app itself) is blocked */
 	if (!(is_root() && !is_protected()))
+		return 0;
+	if (!p || !p->protect_from_root)
 		return 0;
 	target_tgid = BPF_CORE_READ(target, tgid);
 	v = bpf_map_lookup_elem(&protected_tgids, &target_tgid);
@@ -169,7 +171,7 @@ int BPF_PROG(obsidian_lsm_task_kill, struct task_struct *target,
 	return 0;
 }
 
-/* Requirement 2c: root may not open the app's own files. */
+/* Requirement 2c: external root may not open the app's own files. */
 SEC("lsm/file_open")
 int BPF_PROG(obsidian_lsm_root_file_open, struct file *file, int ret)
 {
@@ -180,16 +182,14 @@ int BPF_PROG(obsidian_lsm_root_file_open, struct file *file, int ret)
 	if (ret != 0)
 		return ret;
 	p = get_policy();
-	if (!p || !p->protect_from_root)
-		return 0;
-	/* only EXTERNAL root (not the protected app itself) is blocked */
 	if (!(is_root() && !is_protected()))
 		return 0;
-	len = bpf_d_path(&file->f_path, path, sizeof(path));
+	if (!p || !p->protect_from_root)
+		return 0;
+	len = bpf_d_path((struct path *)&file->f_path, path, sizeof(path));
 	if (len < 0)
 		return 0;
 	if (p->home[0] != '\0' && path_has_prefix(path, p->home))
 		return -EPERM;
 	return 0;
 }
-OBSIDIAN_EOF

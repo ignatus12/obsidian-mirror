@@ -210,6 +210,7 @@ done
 chmod 755 "$PREFIX" "$BINDIR" "$LIBDIR" "$SCRIPTDIR" "$FAKEROOT" "$MANIFESTDIR"
 mkdir -p "/opt/obsidian/var/homes" 2>/dev/null
 chmod 1777 "/opt/obsidian/var/homes" 2>/dev/null || true
+mkdir -p "/opt/obsidian/var/scan" 2>/dev/null; chmod 1777 "/opt/obsidian/var/scan" 2>/dev/null || true
 ok "$PREFIX"
 ok "$MANIFESTDIR"
 
@@ -2038,6 +2039,7 @@ mount -t proc proc /proc
 HOMESTORE="/opt/obsidian/var/homes/$REAL_UID-$OBSIDIAN_APPKEY"
 mkdir -p "/opt/obsidian/var/homes" 2>/dev/null || true
 chmod 1777 "/opt/obsidian/var/homes" 2>/dev/null || true
+mkdir -p "/opt/obsidian/var/scan" 2>/dev/null; chmod 1777 "/opt/obsidian/var/scan" 2>/dev/null || true
 mount -t tmpfs tmpfs /home
 mkdir -p $HOMESTORE/.fake/sys_spoofs
 
@@ -2368,6 +2370,7 @@ fi
 # the app is kernel-confined (hardware denied, cannot read other users/root,
 # cannot read Obsidian internals). The profile is loaded here, in the root
 # context, because the inner stage runs unprivileged and cannot load it.
+export PATH="/usr/sbin:/sbin:$PATH"
 OBS_AA="$BINDIR/obsidian-apparmor.sh"
 if [ -x "$OBS_AA" ] && [ "$(id -u)" = "0" ] && command -v aa-exec >/dev/null 2>&1; then
     HW_FLAG=""; [ "$GPU_MODE" = strict ] && HW_FLAG="--enforce-hw"

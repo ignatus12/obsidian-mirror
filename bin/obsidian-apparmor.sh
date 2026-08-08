@@ -1,4 +1,5 @@
 #!/bin/sh
+export PATH="/usr/sbin:/sbin:$PATH"
 # ===========================================================================
 # /opt/obsidian/bin/obsidian-apparmor.sh
 #
@@ -109,7 +110,7 @@ EOF
         echo "obsidian-apparmor: apparmor_parser not installed; profile written but not loaded" >&2
         return 1
     fi
-    apparmor_parser -r "$prof" 2>/dev/null && echo "obsidian-apparmor: loaded profile ${PROF_PREFIX}${appkey}"
+    apparmor_parser -r "$prof" 2>&1 && echo "obsidian-apparmor: loaded profile ${PROF_PREFIX}${appkey}"
 }
 
 # ---------------------------------------------------------------------------

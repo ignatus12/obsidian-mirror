@@ -2036,7 +2036,7 @@ mount --make-rprivate / 2>/dev/null || true
 # there. Non-root users cannot write /home nor execute in /tmp (noexec), so their
 # fake home lives under their own real home, which is both writable and exec-able.
 if [ "$(id -u)" = "0" ]; then
-    FAKE_HOME="$FAKE_HOME"
+    FAKE_HOME="/home/$FAKE_USER"
 else
     FAKE_HOME="$HOME/.obsidian/$FAKE_USER"
 fi
@@ -2302,22 +2302,22 @@ done
 
 # IPC and Wayland Socket Passthrough
 if [ -n "$REAL_RUNTIME_DIR" ] && [ -d "$REAL_RUNTIME_DIR" ]; then
-    mkdir -p /tmp/obsidian/.real_socks
+    mkdir -p $FAKE_HOME/.real_socks
     for sock in "$WAYLAND_SOCK" pulse/native pipewire-0; do
         if [ -S "$REAL_RUNTIME_DIR/$sock" ]; then
-            mkdir -p "$(dirname "/tmp/obsidian/.real_socks/$sock")"
-            touch "/tmp/obsidian/.real_socks/$sock"
-            mount --bind "$REAL_RUNTIME_DIR/$sock" "/tmp/obsidian/.real_socks/$sock"
+            mkdir -p "$(dirname "$FAKE_HOME/.real_socks/$sock")"
+            touch "$FAKE_HOME/.real_socks/$sock"
+            mount --bind "$REAL_RUNTIME_DIR/$sock" "$FAKE_HOME/.real_socks/$sock"
         fi
     done
 
     mount -t tmpfs tmpfs "$REAL_RUNTIME_DIR"
 
     for sock in "$WAYLAND_SOCK" pulse/native pipewire-0; do
-        if [ -S "/tmp/obsidian/.real_socks/$sock" ]; then
+        if [ -S "$FAKE_HOME/.real_socks/$sock" ]; then
             mkdir -p "$(dirname "$REAL_RUNTIME_DIR/$sock")"
             touch "$REAL_RUNTIME_DIR/$sock"
-            mount --bind "/tmp/obsidian/.real_socks/$sock" "$REAL_RUNTIME_DIR/$sock"
+            mount --bind "$FAKE_HOME/.real_socks/$sock" "$REAL_RUNTIME_DIR/$sock"
         fi
     done
 fi
@@ -2516,7 +2516,7 @@ if [ "$COLOR" = auto ]; then
     if [ -t 1 ]; then COLOR=yes; else COLOR=no; fi
 fi
 
-TMPD="$(mktemp -d 2>/dev/null || echo /tmp/obsidian-audit.$$)"
+TMPD="$(mktemp -d 2>/dev/null || echo $HOME/.obsidian/audit.$$)"
 mkdir -p "$TMPD"
 trap 'rm -rf "$TMPD"' EXIT INT TERM
 

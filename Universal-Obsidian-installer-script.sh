@@ -170,7 +170,7 @@ fi
 # =====================================================================
 step "Installing dependencies"
 # =====================================================================
-APK_PKGS="gcc musl-dev linux-headers libseccomp-dev libseccomp util-linux coreutils fontconfig pciutils gawk grep"
+APK_PKGS="apparmor apparmor-utils gcc musl-dev linux-headers libseccomp-dev libseccomp util-linux coreutils fontconfig pciutils gawk grep"
 if [ "$DO_DEPS" -eq 1 ]; then
     if command -v apk >/dev/null 2>&1; then
         printf '      apk add --no-cache %s\n' "$APK_PKGS"

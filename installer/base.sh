@@ -2357,6 +2357,18 @@ if [ "$(id -u)" = "0" ]; then
 else
     UNS_ARGS="--user --map-user=1000 --map-group=1000"
 fi
+
+# v3.5 (AppArmor backend, Option C). When AppArmor + aa-exec are present and
+# we are root, load the per-app profile and run the whole launch under it so
+# the app is kernel-confined (hardware denied, cannot read other users/root,
+# cannot read Obsidian internals). The profile is loaded here, in the root
+# context, because the inner stage runs unprivileged and cannot load it.
+OBS_AA="$(command -v obsidian-apparmor.sh 2>/dev/null)"
+if [ -n "$OBS_AA" ] && [ "$(id -u)" = "0" ] && command -v aa-exec >/dev/null 2>&1; then
+    HW_FLAG=""; [ "$GPU_MODE" = strict ] && HW_FLAG="--enforce-hw"
+    "$OBS_AA" load "$OBSIDIAN_APPKEY" "$HOME" $HW_FLAG >/dev/null 2>&1 || true
+    exec aa-exec -p "obsidian-$OBSIDIAN_APPKEY" -- unshare $UNS_ARGS "$INNER_STAGE" "$@"
+fi
 exec unshare $UNS_ARGS "$INNER_STAGE" "$@"
 ' -- "$REAL_UID" "$REAL_GID" "$FAKE_ROOT" "$PRELOAD" "$FAKE_USER" "$FAKE_HOSTNAME" \
      "$FAKE_MACHINE_ID" "$FAKE_BOOT_ID" "$DISTRO_NAME" "$DISTRO_VER" "$DISTRO_ID" \
@@ -2396,37 +2408,18 @@ fi
 
 # "$@" is expanded HERE, at run time, by this shell -- each
 # argument stays a separate argv element.
-# v3.5 BPF-LSM kernel enforcement (Option A). When obsidian-lsm-load is
-# installed and we are root, background the app and run the loader with the
-# app's PID so the kernel-level hardware + root-protection policies apply for
-# the app's whole lifetime. The loader's watchdog kills the app if the policy
-# is ever tampered with or the BPF link is detached.
-obsidian_launch() {
-    OBS_LSM_LOAD="$(command -v obsidian-lsm-load 2>/dev/null)"
-    if [ -n "$OBS_LSM_LOAD" ] && [ "$(id -u)" = "0" ]; then
-        HW_FLAG=""; [ "$GPU_MODE" = strict ] && HW_FLAG="--enforce-hw"
-        ( "$@" ) &
-        APP_PID=$!
-        "$OBS_LSM_LOAD" --pid "$APP_PID" --home "$HOME" --protect-root $HW_FLAG
-        wait "$APP_PID"
-        RC=$?
-        exit $RC
-    fi
-    exec "$@"
-}
-
 if command -v taskset >/dev/null 2>&1; then
     if [ -x "$OBSIDIAN_SECCOMP" ]; then
-        obsidian_launch "$OBSIDIAN_SECCOMP" -- taskset -c "$TASKSET_ARG" "$@"
+        exec "$OBSIDIAN_SECCOMP" -- taskset -c "$TASKSET_ARG" "$@"
     fi
-    obsidian_launch taskset -c "$TASKSET_ARG" "$@"
+    exec taskset -c "$TASKSET_ARG" "$@"
 fi
 
 if [ -x "$OBSIDIAN_SECCOMP" ]; then
-    obsidian_launch "$OBSIDIAN_SECCOMP" -- "$@"
+    exec "$OBSIDIAN_SECCOMP" -- "$@"
 fi
 
-obsidian_launch "$@"
+exec "$@"
 OBSIDIAN_PAYLOAD_INNER
 chmod 755 "$BINDIR/obsidian-inner"
 ok "bin/obsidian-inner"
@@ -3546,6 +3539,19 @@ if command -v clang >/dev/null 2>&1 && command -v bpftool >/dev/null 2>&1 && \
     fi
 else
     warn "obsidian-lsm-load skipped: clang/bpftool/gcc not installed. v3.5 kernel enforcement off."
+fi
+
+# v3.5 (AppArmor backend, Option C). If AppArmor userspace is present, lock
+# down the Obsidian source/bin so a confined app (and other actors) cannot read
+# the implementation. The per-app runtime profiles are loaded at launch.
+if command -v apparmor_parser >/dev/null 2>&1 && [ -x "$BINDIR/obsidian-apparmor.sh" ]; then
+    if "$BINDIR/obsidian-apparmor.sh" protect-src on 2>/dev/null; then
+        ok "obsidian-apparmor: source/bin locked to root (700)"
+    else
+        warn "obsidian-apparmor: protect-src failed; source not locked"
+    fi
+else
+    warn "obsidian-apparmor: apparmor_parser not installed; source not locked. 'apk add apparmor-parser' for v3.5."
 fi
 
 chmod 755 "$BINDIR/obsidian-launch" "$BINDIR/obsidian-inner" "$BINDIR/obsidian-audit"

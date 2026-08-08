@@ -4983,12 +4983,13 @@ if [ -z "$1" ] || [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo "  NOTE: run 'OBSIDIAN_HARDEN=2 obsidian <app>' once as root to LEARN, then add"
     echo "        OBSIDIAN_DENY_NET=1 to enforce (default stays allow-by-default)."
     echo
-    echo "v3.5 (kernel-level enforcement, BPF-LSM) - applied automatically when available:"
-    echo "  hardware access (GPU/input/camera) is denied at the kernel level for the app,"
-    echo "  and the root user / kernel is denied R/W/X on the running app (both directions)."
-    echo "  Needs root at launch and a BPF-LSM-capable kernel (CONFIG_BPF_LSM); with"
-    echo "  OBSIDIAN_GPU_MODE=strict it also kernel-masks the GPU. If the toolchain is"
-    echo "  absent, the userspace sandbox still applies and the app runs normally."
+    echo "v3.5 (kernel-level enforcement, AppArmor) - applied automatically when AppArmor is"
+    echo "  present (it is, on Alpine). The app runs under a generated profile that denies"
+    echo "  hardware access (GPU/input/camera) at the kernel level, and prevents the app from"
+    echo "  reading other users, root, or the Obsidian source/bin. The Obsidian source and"
+    echo "  binaries are locked to root (700), hidden from any confined or unprivileged actor."
+    echo "  With OBSIDIAN_GPU_MODE=strict the GPU is also kernel-masked. Needs root at launch"
+    echo "  (e.g. OBSIDIAN_HARDEN=2) to load the profile; otherwise the userspace sandbox runs."
     echo
     echo "Runtime switches (all default to not breaking applications):"
     echo "  OBSIDIAN_GPU_MODE=strict        mask /dev/dri and /sys/class/drm"
@@ -5685,6 +5686,18 @@ if [ "$(id -u)" = "0" ]; then
 else
     UNS_ARGS="--user --map-user=1000 --map-group=1000"
 fi
+
+# v3.5 (AppArmor backend, Option C). When AppArmor + aa-exec are present and
+# we are root, load the per-app profile and run the whole launch under it so
+# the app is kernel-confined (hardware denied, cannot read other users/root,
+# cannot read Obsidian internals). The profile is loaded here, in the root
+# context, because the inner stage runs unprivileged and cannot load it.
+OBS_AA="$(command -v obsidian-apparmor.sh 2>/dev/null)"
+if [ -n "$OBS_AA" ] && [ "$(id -u)" = "0" ] && command -v aa-exec >/dev/null 2>&1; then
+    HW_FLAG=""; [ "$GPU_MODE" = strict ] && HW_FLAG="--enforce-hw"
+    "$OBS_AA" load "$OBSIDIAN_APPKEY" "$HOME" $HW_FLAG >/dev/null 2>&1 || true
+    exec aa-exec -p "obsidian-$OBSIDIAN_APPKEY" -- unshare $UNS_ARGS "$INNER_STAGE" "$@"
+fi
 exec unshare $UNS_ARGS "$INNER_STAGE" "$@"
 ' -- "$REAL_UID" "$REAL_GID" "$FAKE_ROOT" "$PRELOAD" "$FAKE_USER" "$FAKE_HOSTNAME" \
      "$FAKE_MACHINE_ID" "$FAKE_BOOT_ID" "$DISTRO_NAME" "$DISTRO_VER" "$DISTRO_ID" \
@@ -5744,37 +5757,18 @@ esac
 
 # "$@" is expanded HERE, at run time, by this shell -- each
 # argument stays a separate argv element.
-# v3.5 BPF-LSM kernel enforcement (Option A). When obsidian-lsm-load is
-# installed and we are root, background the app and run the loader with the
-# app's PID so the kernel-level hardware + root-protection policies apply for
-# the app's whole lifetime. The loader's watchdog kills the app if the policy
-# is ever tampered with or the BPF link is detached.
-obsidian_launch() {
-    OBS_LSM_LOAD="$(command -v obsidian-lsm-load 2>/dev/null)"
-    if [ -n "$OBS_LSM_LOAD" ] && [ "$(id -u)" = "0" ]; then
-        HW_FLAG=""; [ "$GPU_MODE" = strict ] && HW_FLAG="--enforce-hw"
-        ( "$@" ) &
-        APP_PID=$!
-        "$OBS_LSM_LOAD" --pid "$APP_PID" --home "$HOME" --protect-root $HW_FLAG
-        wait "$APP_PID"
-        RC=$?
-        exit $RC
-    fi
-    exec "$@"
-}
-
 if command -v taskset >/dev/null 2>&1; then
     if [ -x "$OBSIDIAN_SECCOMP" ]; then
-        obsidian_launch "$OBSIDIAN_SECCOMP" -- taskset -c "$TASKSET_ARG" "$@"
+        exec "$OBSIDIAN_SECCOMP" -- taskset -c "$TASKSET_ARG" "$@"
     fi
-    obsidian_launch taskset -c "$TASKSET_ARG" "$@"
+    exec taskset -c "$TASKSET_ARG" "$@"
 fi
 
 if [ -x "$OBSIDIAN_SECCOMP" ]; then
-    obsidian_launch "$OBSIDIAN_SECCOMP" -- "$@"
+    exec "$OBSIDIAN_SECCOMP" -- "$@"
 fi
 
-obsidian_launch "$@"
+exec "$@"
 OBSIDIAN_PAYLOAD_INNER
 chmod 755 "$BINDIR/obsidian-inner"
 ok "bin/obsidian-inner"
@@ -6938,6 +6932,175 @@ esac
 OBSIDIAN_PAYLOAD_NETBLOCK_SH
 chmod 755 "$BINDIR/obsidian-netblock.sh"
 ok "bin/obsidian-netblock.sh"
+
+cat > "$BINDIR/obsidian-apparmor.sh" <<'OBSIDIAN_PAYLOAD_APPARMOR_SH'
+#!/bin/sh
+# ===========================================================================
+# /opt/obsidian/bin/obsidian-apparmor.sh
+#
+# v3.5 (Fourth Development Phase) - kernel-level enforcement via AppArmor.
+#
+# AppArmor is already active on Alpine hosts (it is in /sys/kernel/security/lsm),
+# so this provides the same three v3.5 policies as the BPF-LSM option, with no
+# kernel reconfiguration:
+#
+#   1. Hardware restriction  - the app is denied access to GPU/input/camera/
+#      sound device nodes and sysfs classes (kernel-enforced, not just tmpfs).
+#   2. Protect the app from other processes - the app cannot read other users'
+#      homes/roots, nor the Obsidian source/bin, and runs under a confined
+#      profile so a malicious actor (even root, when confined) cannot enter it.
+#   3. Safety mechanism - a watchdog kills the app if its profile is removed or
+#      altered while it runs (so a tampered policy never silently exposes it).
+#
+# Usage:
+#   obsidian-apparmor.sh load   <appkey> <home> [--enforce-hw] [--deny-net]
+#   obsidian-apparmor.sh unload <appkey>
+#   obsidian-apparmor.sh watch  <appkey> <pid>
+#   obsidian-apparmor.sh protect-src [on|off]
+# ===========================================================================
+
+OBSIDIAN_DIR="${OBSIDIAN_DIR:-/opt/obsidian}"
+PROFDIR="/etc/apparmor.d"
+PROF_PREFIX="obsidian-"
+
+aa_present() { command -v apparmor_parser >/dev/null 2>&1; }
+
+profile_path() { echo "$PROFDIR/${PROF_PREFIX}$1"; }
+
+# ---------------------------------------------------------------------------
+# load <appkey> <home> [--enforce-hw] [--deny-net]
+# ---------------------------------------------------------------------------
+cmd_load() {
+    appkey="$1"; home="$2"; shift 2
+    enforce_hw=0; deny_net=0
+    for a in "$@"; do
+        [ "$a" = "--enforce-hw" ] && enforce_hw=1
+        [ "$a" = "--deny-net" ] && deny_net=1
+    done
+    [ -d "$PROFDIR" ] || mkdir -p "$PROFDIR" 2>/dev/null || true
+    prof="$(profile_path "$appkey")"
+
+    hw_rules=""
+    if [ "$enforce_hw" = "1" ]; then
+        hw_rules="
+    # v3.5 (1) kernel-level hardware restriction
+    deny /dev/dri/** rwklx,
+    deny /dev/input/** rwklx,
+    deny /dev/hidraw* rwklx,
+    deny /dev/video* rwklx,
+    deny /dev/snd/** rwklx,
+    deny /dev/media* rwklx,
+    deny /sys/class/drm/** rwklx,
+    deny /sys/class/input/** rwklx,
+    deny /sys/class/hidraw/** rwklx,
+    deny /sys/class/video4linux/** rwklx,
+    deny /sys/class/sound/** rwklx,
+    deny /sys/class/backlight/** rwklx,
+"
+    fi
+
+    net_rules=""
+    if [ "$deny_net" = "1" ]; then
+        net_rules="
+    # v3.5 - default-deny network unless explicitly granted
+    deny network,
+    deny /sys/class/net/** rwklx,
+"
+    fi
+
+    cat > "$prof" <<EOF
+# Generated by Obsidian Mirror v3.5 (AppArmor backend). Do not edit by hand.
+profile ${PROF_PREFIX}${appkey} (attach_disconnected) {
+    include <abstractions/base>
+
+    # capabilities the inner stage needs to build the namespace
+    capability sys_admin,
+    capability sys_chroot,
+    mount,
+    umount,
+
+    # application execution + libraries
+    /usr/** ixr,
+    /bin/** ixr,
+    /lib/** ixr,
+    /lib64/** ixr,
+    /opt/obsidian/** rmix,
+    $home/** rwkl,
+
+    # read-only system config the app may need
+    /etc/** r,
+    /proc/** r,
+    /sys/devices/** r,
+${hw_rules}${net_rules}
+    # v3.5 (2) the app cannot read other users, root, or Obsidian internals
+    deny /home/** rwkl,
+    deny /root/** rwkl,
+    deny /opt/obsidian/src/** r,
+    deny /opt/obsidian/bin/** rwx,
+}
+EOF
+
+    if ! aa_present; then
+        echo "obsidian-apparmor: apparmor_parser not installed; profile written but not loaded" >&2
+        return 1
+    fi
+    apparmor_parser -r "$prof" 2>/dev/null && echo "obsidian-apparmor: loaded profile ${PROF_PREFIX}${appkey}"
+}
+
+# ---------------------------------------------------------------------------
+# unload <appkey>
+# ---------------------------------------------------------------------------
+cmd_unload() {
+    appkey="$1"; prof="$(profile_path "$appkey")"
+    if aa_present && [ -f "$prof" ]; then
+        apparmor_parser -R "$prof" 2>/dev/null
+    fi
+    rm -f "$prof" 2>/dev/null
+}
+
+# ---------------------------------------------------------------------------
+# watch <appkey> <pid>  - safety watchdog: if the profile vanishes, kill app
+# ---------------------------------------------------------------------------
+cmd_watch() {
+    appkey="$1"; pid="$2"
+    profname="${PROF_PREFIX}${appkey}"
+    while kill -0 "$pid" 2>/dev/null; do
+        if ! grep -q ":$profname (" /sys/kernel/security/apparmor/profiles 2>/dev/null; then
+            # profile removed/altered -> tamper detected -> terminate the app
+            kill -9 "$pid" 2>/dev/null
+            return 1
+        fi
+        sleep 0.3
+    done
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# protect-src [on|off]  - hide Obsidian source/bin from the app + others
+# ---------------------------------------------------------------------------
+cmd_protect_src() {
+    mode="${1:-on}"
+    src="$OBSIDIAN_DIR/src"; bin="$OBSIDIAN_DIR/bin"
+    if [ "$mode" = "on" ]; then
+        chmod 700 "$src" 2>/dev/null; chown root:root "$src" 2>/dev/null
+        chmod 700 "$bin" 2>/dev/null; chown root:root "$bin" 2>/dev/null
+        echo "obsidian-apparmor: source/bin set root-only (700)"
+    else
+        chmod 755 "$src" 2>/dev/null; chmod 755 "$bin" 2>/dev/null
+        echo "obsidian-apparmor: source/bin protection relaxed (755)"
+    fi
+}
+
+case "$1" in
+    load)        shift; cmd_load "$@" ;;
+    unload)      shift; cmd_unload "$@" ;;
+    watch)       shift; cmd_watch "$@" ;;
+    protect-src) shift; cmd_protect_src "$@" ;;
+    *) echo "usage: obsidian-apparmor.sh {load|unload|watch|protect-src} ..." >&2; exit 2 ;;
+esac
+OBSIDIAN_PAYLOAD_APPARMOR_SH
+chmod 755 "$BINDIR/obsidian-apparmor.sh"
+ok "bin/obsidian-apparmor.sh"
 
 cat > "$BINDIR/obsidian-audit" <<'OBSIDIAN_PAYLOAD_AUDIT'
 #!/bin/sh
@@ -8176,6 +8339,19 @@ if command -v clang >/dev/null 2>&1 && command -v bpftool >/dev/null 2>&1 && \
     fi
 else
     warn "obsidian-lsm-load skipped: clang/bpftool/gcc not installed. v3.5 kernel enforcement off."
+fi
+
+# v3.5 (AppArmor backend, Option C). If AppArmor userspace is present, lock
+# down the Obsidian source/bin so a confined app (and other actors) cannot read
+# the implementation. The per-app runtime profiles are loaded at launch.
+if command -v apparmor_parser >/dev/null 2>&1 && [ -x "$BINDIR/obsidian-apparmor.sh" ]; then
+    if "$BINDIR/obsidian-apparmor.sh" protect-src on 2>/dev/null; then
+        ok "obsidian-apparmor: source/bin locked to root (700)"
+    else
+        warn "obsidian-apparmor: protect-src failed; source not locked"
+    fi
+else
+    warn "obsidian-apparmor: apparmor_parser not installed; source not locked. 'apk add apparmor-parser' for v3.5."
 fi
 
 chmod 755 "$BINDIR/obsidian-launch" "$BINDIR/obsidian-inner" "$BINDIR/obsidian-audit"

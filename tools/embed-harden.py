@@ -181,6 +181,13 @@ def main():
         "bin/obsidian-netblock.sh",
         chmod="755",
     )
+    shsrc += payload(
+        '$BINDIR/obsidian-apparmor.sh',
+        "OBSIDIAN_PAYLOAD_APPARMOR_SH",
+        read("bin/obsidian-apparmor.sh"),
+        "bin/obsidian-apparmor.sh",
+        chmod="755",
+    )
     src = splice(src, 'ok "bin/obsidian-inner"\n\n', shsrc)
 
     # ---------------------------------------------------------------
@@ -274,12 +281,13 @@ fi
     echo "  NOTE: run 'OBSIDIAN_HARDEN=2 obsidian <app>' once as root to LEARN, then add"
     echo "        OBSIDIAN_DENY_NET=1 to enforce (default stays allow-by-default)."
     echo
-    echo "v3.5 (kernel-level enforcement, BPF-LSM) - applied automatically when available:"
-    echo "  hardware access (GPU/input/camera) is denied at the kernel level for the app,"
-    echo "  and the root user / kernel is denied R/W/X on the running app (both directions)."
-    echo "  Needs root at launch and a BPF-LSM-capable kernel (CONFIG_BPF_LSM); with"
-    echo "  OBSIDIAN_GPU_MODE=strict it also kernel-masks the GPU. If the toolchain is"
-    echo "  absent, the userspace sandbox still applies and the app runs normally."
+    echo "v3.5 (kernel-level enforcement, AppArmor) - applied automatically when AppArmor is"
+    echo "  present (it is, on Alpine). The app runs under a generated profile that denies"
+    echo "  hardware access (GPU/input/camera) at the kernel level, and prevents the app from"
+    echo "  reading other users, root, or the Obsidian source/bin. The Obsidian source and"
+    echo "  binaries are locked to root (700), hidden from any confined or unprivileged actor."
+    echo "  With OBSIDIAN_GPU_MODE=strict the GPU is also kernel-masked. Needs root at launch"
+    echo "  (e.g. OBSIDIAN_HARDEN=2) to load the profile; otherwise the userspace sandbox runs."
 ''',
     )
     src = replace_once(

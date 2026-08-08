@@ -5364,7 +5364,7 @@ shift 1
 
 mount --make-rprivate / 2>/dev/null || true
 mount -t proc proc /proc
-HOMESTORE="/opt/obsidian/var/homes/$OBSIDIAN_APPKEY"
+HOMESTORE="/opt/obsidian/var/homes/$REAL_UID-$OBSIDIAN_APPKEY"
 mkdir -p "/opt/obsidian/var/homes" 2>/dev/null || true
 chmod 1777 "/opt/obsidian/var/homes" 2>/dev/null || true
 mount -t tmpfs tmpfs /home
@@ -5379,7 +5379,7 @@ mkdir -p $HOMESTORE/.fake/sys_spoofs
 if [ -n "$OBSIDIAN_FRESH" ] && [ "$OBSIDIAN_FRESH" != "0" ]; then
     mkdir -p "$HOMESTORE"
 else
-    HOMESTORE="/opt/obsidian/var/homes/$OBSIDIAN_APPKEY"
+    HOMESTORE="/opt/obsidian/var/homes/$REAL_UID-$OBSIDIAN_APPKEY"
     # Best-effort, never fatal. If the persistent store cannot be
     # created (e.g. the launcher is run by a user that cannot write
     # /opt/obsidian/var/homes) or the bind is refused by the kernel or

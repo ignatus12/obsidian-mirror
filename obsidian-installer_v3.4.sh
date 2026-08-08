@@ -217,6 +217,8 @@ done
 chmod 1777 "$LEARNDIR"
 chmod 1777 "$VARDIR/homes"
 chmod 755 "$PREFIX" "$BINDIR" "$LIBDIR" "$SCRIPTDIR" "$FAKEROOT" "$MANIFESTDIR"
+mkdir -p "$OBSIDIAN_DIR/var/homes" 2>/dev/null
+chmod 1777 "$OBSIDIAN_DIR/var/homes" 2>/dev/null || true
 ok "$PREFIX"
 ok "$MANIFESTDIR"
 
@@ -512,7 +514,7 @@ int open(const char *pathname, int flags, ...) {
         mode = va_arg(args, mode_t); va_end(args);
     }
     if (is_cpu_topology_path(pathname)) {
-        return real_open("$FAKE_HOME/.fake/cpu_online", flags, mode);
+        return real_open("$HOMESTORE/.fake/cpu_online", flags, mode);
     }
     return real_open(pathname, flags, mode);
 }
@@ -526,7 +528,7 @@ int openat(int dirfd, const char *pathname, int flags, ...) {
         mode = va_arg(args, mode_t); va_end(args);
     }
     if (is_cpu_topology_path(pathname)) {
-        return real_openat(AT_FDCWD, "$FAKE_HOME/.fake/cpu_online", flags, mode);
+        return real_openat(AT_FDCWD, "$HOMESTORE/.fake/cpu_online", flags, mode);
     }
     return real_openat(dirfd, pathname, flags, mode);
 }
@@ -5361,18 +5363,9 @@ FONTS_CONF="$1"
 shift 1
 
 mount --make-rprivate / 2>/dev/null || true
-# v3.5 fix: fake home location. Root mounts a tmpfs on /home and uses $FAKE_HOME
-# there. Non-root users cannot write /home nor execute in /tmp (noexec), so their
-# fake home lives under their own real home, which is both writable and exec-able.
-if [ "$(id -u)" = "0" ]; then
-    FAKE_HOME="/home/$FAKE_USER"
-else
-    FAKE_HOME="$HOME/.obsidian/$FAKE_USER"
-fi
-export FAKE_HOME
 mount -t proc proc /proc
 mount -t tmpfs tmpfs /home
-mkdir -p $FAKE_HOME/.fake/sys_spoofs
+mkdir -p $HOMESTORE/.fake/sys_spoofs
 
 # Persistent per-application home directory. By default the app keeps
 # its preferences, caches and config across launches; only the spoofed
@@ -5381,7 +5374,7 @@ mkdir -p $FAKE_HOME/.fake/sys_spoofs
 # in the branch below BEFORE the chmod runs: set -e is active here, and a
 # chmod on a directory that does not exist yet would abort the launch.
 if [ -n "$OBSIDIAN_FRESH" ] && [ "$OBSIDIAN_FRESH" != "0" ]; then
-    mkdir -p "$FAKE_HOME"
+    mkdir -p "$HOMESTORE"
 else
     HOMESTORE="/opt/obsidian/var/homes/$OBSIDIAN_APPKEY"
     # Best-effort, never fatal. If the persistent store cannot be
@@ -5393,30 +5386,30 @@ else
     if mkdir -p "$HOMESTORE" 2>/dev/null; then
         chmod 700 "$HOMESTORE" 2>/dev/null || true
         chown "$REAL_UID" "$HOMESTORE" 2>/dev/null || true
-        mkdir -p "$FAKE_HOME"
-        mount --bind "$HOMESTORE" "$FAKE_HOME" 2>/dev/null \
-            || mount -o bind "$HOMESTORE" "$FAKE_HOME" 2>/dev/null \
+        mkdir -p "$HOMESTORE"
+        mount --bind "$HOMESTORE" "$HOMESTORE" 2>/dev/null \
+            || mount -o bind "$HOMESTORE" "$HOMESTORE" 2>/dev/null \
             || true
     else
-        mkdir -p "$FAKE_HOME"
+        mkdir -p "$HOMESTORE"
     fi
 fi
-chmod 700 "$FAKE_HOME" 2>/dev/null || true
-mkdir -p "$FAKE_HOME/.cache/fontconfig"
-mkdir -p "$FAKE_HOME/.config"
+chmod 700 "$HOMESTORE" 2>/dev/null || true
+mkdir -p "$HOMESTORE/.cache/fontconfig"
+mkdir -p "$HOMESTORE/.config"
 
-touch $FAKE_HOME/.fake/empty
-printf "0-1\n" > $FAKE_HOME/.fake/cpu_online
+touch $HOMESTORE/.fake/empty
+printf "0-1\n" > $HOMESTORE/.fake/cpu_online
 
-printf "%s\n" "$FAKE_HOSTNAME" > $FAKE_HOME/.fake/hostname
-printf "%s\n" "$FAKE_MACHINE_ID" > $FAKE_HOME/.fake/machine-id
-printf "%s\n" "$FAKE_BOOT_ID" > $FAKE_HOME/.fake/boot_id
-printf "%s\n" "$DISTRO_KERNEL" > $FAKE_HOME/.fake/osrelease
-printf "%s\n" "$DISTRO_PROC_VER" > $FAKE_HOME/.fake/version
-printf "%s\n" "$DISTRO_CMDLINE" > $FAKE_HOME/.fake/cmdline
-printf "UTC\n" > $FAKE_HOME/.fake/timezone
+printf "%s\n" "$FAKE_HOSTNAME" > $HOMESTORE/.fake/hostname
+printf "%s\n" "$FAKE_MACHINE_ID" > $HOMESTORE/.fake/machine-id
+printf "%s\n" "$FAKE_BOOT_ID" > $HOMESTORE/.fake/boot_id
+printf "%s\n" "$DISTRO_KERNEL" > $HOMESTORE/.fake/osrelease
+printf "%s\n" "$DISTRO_PROC_VER" > $HOMESTORE/.fake/version
+printf "%s\n" "$DISTRO_CMDLINE" > $HOMESTORE/.fake/cmdline
+printf "UTC\n" > $HOMESTORE/.fake/timezone
 
-cat > $FAKE_HOME/.fake/os-release <<OSRELEOF
+cat > $HOMESTORE/.fake/os-release <<OSRELEOF
 NAME="$DISTRO_NAME"
 VERSION="$DISTRO_VER"
 ID=$DISTRO_ID
@@ -5427,46 +5420,46 @@ OSRELEOF
 
 hostname "$FAKE_HOSTNAME"
 
-[ -f /etc/hostname ] && mount --bind $FAKE_HOME/.fake/hostname /etc/hostname
-[ -f /etc/machine-id ] && mount --bind $FAKE_HOME/.fake/machine-id /etc/machine-id
-[ -f /etc/os-release ] && mount --bind $FAKE_HOME/.fake/os-release /etc/os-release
-[ -f /proc/version ] && mount --bind $FAKE_HOME/.fake/version /proc/version
-[ -f /proc/cmdline ] && mount --bind $FAKE_HOME/.fake/cmdline /proc/cmdline
-[ -f /proc/sys/kernel/osrelease ] && { mount --bind $FAKE_HOME/.fake/osrelease /proc/sys/kernel/osrelease 2>/dev/null || true; }
-[ -f /etc/timezone ] && mount --bind $FAKE_HOME/.fake/timezone /etc/timezone
+[ -f /etc/hostname ] && mount --bind $HOMESTORE/.fake/hostname /etc/hostname
+[ -f /etc/machine-id ] && mount --bind $HOMESTORE/.fake/machine-id /etc/machine-id
+[ -f /etc/os-release ] && mount --bind $HOMESTORE/.fake/os-release /etc/os-release
+[ -f /proc/version ] && mount --bind $HOMESTORE/.fake/version /proc/version
+[ -f /proc/cmdline ] && mount --bind $HOMESTORE/.fake/cmdline /proc/cmdline
+[ -f /proc/sys/kernel/osrelease ] && { mount --bind $HOMESTORE/.fake/osrelease /proc/sys/kernel/osrelease 2>/dev/null || true; }
+[ -f /etc/timezone ] && mount --bind $HOMESTORE/.fake/timezone /etc/timezone
 [ -f /etc/localtime ] && mount --bind /usr/share/zoneinfo/UTC /etc/localtime
 
 for f in /etc/issue /etc/issue.net /etc/lsb-release /etc/alpine-release /etc/debian_version /etc/arch-release /etc/redhat-release; do
-    [ -f "$f" ] && mount --bind $FAKE_HOME/.fake/empty "$f" 2>/dev/null || true
+    [ -f "$f" ] && mount --bind $HOMESTORE/.fake/empty "$f" 2>/dev/null || true
 done
 
-cat > $FAKE_HOME/.fake/passwd <<PASSWDEOF
+cat > $HOMESTORE/.fake/passwd <<PASSWDEOF
 root:x:0:0:root:/root:/bin/sh
-$FAKE_USER:x:1000:1000:Generic User:$FAKE_HOME:/bin/sh
+$FAKE_USER:x:1000:1000:Generic User:$HOMESTORE:/bin/sh
 nobody:x:65534:65534:nobody:/:/sbin/nologin
 PASSWDEOF
 
-cat > $FAKE_HOME/.fake/group <<GROUPEOF
+cat > $HOMESTORE/.fake/group <<GROUPEOF
 root:x:0:
 $FAKE_USER:x:1000:
 nobody:x:65534:
 GROUPEOF
 
-[ -f /etc/passwd ] && mount --bind $FAKE_HOME/.fake/passwd /etc/passwd 2>/dev/null || true
-[ -f /etc/group ] && mount --bind $FAKE_HOME/.fake/group /etc/group 2>/dev/null || true
+[ -f /etc/passwd ] && mount --bind $HOMESTORE/.fake/passwd /etc/passwd 2>/dev/null || true
+[ -f /etc/group ] && mount --bind $HOMESTORE/.fake/group /etc/group 2>/dev/null || true
 
 if [ -f /var/lib/dbus/machine-id ] && [ ! -L /var/lib/dbus/machine-id ]; then
-    mount --bind $FAKE_HOME/.fake/machine-id /var/lib/dbus/machine-id
+    mount --bind $HOMESTORE/.fake/machine-id /var/lib/dbus/machine-id
 fi
-[ -f /proc/sys/kernel/random/boot_id ] && { mount --bind $FAKE_HOME/.fake/boot_id /proc/sys/kernel/random/boot_id 2>/dev/null || true; }
+[ -f /proc/sys/kernel/random/boot_id ] && { mount --bind $HOMESTORE/.fake/boot_id /proc/sys/kernel/random/boot_id 2>/dev/null || true; }
 
 mount -t tmpfs tmpfs /tmp
 chmod 1777 /tmp
 
-: > $FAKE_HOME/.fake/cpuinfo
+: > $HOMESTORE/.fake/cpuinfo
 c=0
 while [ "$c" -lt "$FAKE_CORE_COUNT" ]; do
-    cat >> $FAKE_HOME/.fake/cpuinfo <<CPUEOF
+    cat >> $HOMESTORE/.fake/cpuinfo <<CPUEOF
 processor	: $c
 vendor_id	: GenuineIntel
 cpu family	: 6
@@ -5486,12 +5479,12 @@ bogomips	: 3600.00
 CPUEOF
     c=$((c + 1))
 done
-[ -f /proc/cpuinfo ] && mount --bind $FAKE_HOME/.fake/cpuinfo /proc/cpuinfo
+[ -f /proc/cpuinfo ] && mount --bind $HOMESTORE/.fake/cpuinfo /proc/cpuinfo
 
 # /proc/meminfo - sysinfo() is hooked in libc, but a direct read of
 # /proc/meminfo bypasses libc entirely. Values are kept consistent
 # with OBSIDIAN_TOTAL_MEMORY and the sysinfo() hook.
-cat > $FAKE_HOME/.fake/meminfo <<MEMEOF
+cat > $HOMESTORE/.fake/meminfo <<MEMEOF
 MemTotal:        8192000 kB
 MemFree:         4096000 kB
 MemAvailable:    6144000 kB
@@ -5524,28 +5517,28 @@ VmallocTotal:   34359738367 kB
 VmallocUsed:       32768 kB
 VmallocChunk:          0 kB
 MEMEOF
-[ -f /proc/meminfo ] && mount --bind $FAKE_HOME/.fake/meminfo /proc/meminfo 2>/dev/null || true
+[ -f /proc/meminfo ] && mount --bind $HOMESTORE/.fake/meminfo /proc/meminfo 2>/dev/null || true
 
 UPTIME_SECS=$(( ( $(od -An -N2 -tu2 < /dev/urandom) % 90000 ) + 600 ))
 IDLE_SECS=$(( UPTIME_SECS * 60 / 100 ))
 NOW=$(date +%s); FAKE_BTIME=$(( NOW - UPTIME_SECS ))
 
-printf "%s.00 %s.00\n" "$UPTIME_SECS" "$IDLE_SECS" > $FAKE_HOME/.fake/uptime
-printf "0.15 0.10 0.05 1/100 1234\n" > $FAKE_HOME/.fake/loadavg
-: > $FAKE_HOME/.fake/diskstats
+printf "%s.00 %s.00\n" "$UPTIME_SECS" "$IDLE_SECS" > $HOMESTORE/.fake/uptime
+printf "0.15 0.10 0.05 1/100 1234\n" > $HOMESTORE/.fake/loadavg
+: > $HOMESTORE/.fake/diskstats
 
-cat > $FAKE_HOME/.fake/stat.awk <<\STATAWKEOF
+cat > $HOMESTORE/.fake/stat.awk <<\STATAWKEOF
 /^cpu[0-9]+/ { n = substr($1, 4) + 0; if (n >= ncpu) next }
 $1 == "btime" { print "btime " bt; next }
 { print }
 STATAWKEOF
 
 if [ -f /proc/stat ]; then
-    awk -v bt="$FAKE_BTIME" -v ncpu="$FAKE_CORE_COUNT" -f $FAKE_HOME/.fake/stat.awk /proc/stat > $FAKE_HOME/.fake/stat
+    awk -v bt="$FAKE_BTIME" -v ncpu="$FAKE_CORE_COUNT" -f $HOMESTORE/.fake/stat.awk /proc/stat > $HOMESTORE/.fake/stat
 fi
 
 for pair in "uptime:/proc/uptime" "loadavg:/proc/loadavg" "diskstats:/proc/diskstats" "stat:/proc/stat"; do
-    src="$FAKE_HOME/.fake/${pair%%:*}"; dst="${pair##*:}"
+    src="$HOMESTORE/.fake/${pair%%:*}"; dst="${pair##*:}"
     [ -f "$dst" ] && mount --bind "$src" "$dst" 2>/dev/null || true
 done
 
@@ -5576,10 +5569,10 @@ if [ -f "$MANIFEST_PATH" ]; then
                 val="${rest#*=}"
                 if [ -e "$path" ]; then
                     if [ -z "$val" ]; then
-                        mount --bind $FAKE_HOME/.fake/empty "$path" 2>/dev/null || true
+                        mount --bind $HOMESTORE/.fake/empty "$path" 2>/dev/null || true
                     else
                         idx=$((idx + 1))
-                        sp_file="$FAKE_HOME/.fake/sys_spoofs/sp_$idx"
+                        sp_file="$HOMESTORE/.fake/sys_spoofs/sp_$idx"
                         printf "%s\n" "$val" > "$sp_file"
                         mount --bind "$sp_file" "$path" 2>/dev/null || true
                     fi
@@ -5631,29 +5624,29 @@ done
 
 # IPC and Wayland Socket Passthrough
 if [ -n "$REAL_RUNTIME_DIR" ] && [ -d "$REAL_RUNTIME_DIR" ]; then
-    mkdir -p $FAKE_HOME/.real_socks
+    mkdir -p /home/.real_socks
     for sock in "$WAYLAND_SOCK" pulse/native pipewire-0; do
         if [ -S "$REAL_RUNTIME_DIR/$sock" ]; then
-            mkdir -p "$(dirname "$FAKE_HOME/.real_socks/$sock")"
-            touch "$FAKE_HOME/.real_socks/$sock"
-            mount --bind "$REAL_RUNTIME_DIR/$sock" "$FAKE_HOME/.real_socks/$sock"
+            mkdir -p "$(dirname "/home/.real_socks/$sock")"
+            touch "/home/.real_socks/$sock"
+            mount --bind "$REAL_RUNTIME_DIR/$sock" "/home/.real_socks/$sock"
         fi
     done
 
     mount -t tmpfs tmpfs "$REAL_RUNTIME_DIR"
 
     for sock in "$WAYLAND_SOCK" pulse/native pipewire-0; do
-        if [ -S "$FAKE_HOME/.real_socks/$sock" ]; then
+        if [ -S "/home/.real_socks/$sock" ]; then
             mkdir -p "$(dirname "$REAL_RUNTIME_DIR/$sock")"
             touch "$REAL_RUNTIME_DIR/$sock"
-            mount --bind "$FAKE_HOME/.real_socks/$sock" "$REAL_RUNTIME_DIR/$sock"
+            mount --bind "/home/.real_socks/$sock" "$REAL_RUNTIME_DIR/$sock"
         fi
     done
 fi
 
 # Environment Export Engine
 export LD_PRELOAD="$PRELOAD"
-export HOME="$FAKE_HOME"
+export HOME="$HOMESTORE"
 export USER="$FAKE_USER"
 export LOGNAME="$FAKE_USER"
 export TZ=UTC
@@ -7197,7 +7190,7 @@ if [ "$COLOR" = auto ]; then
     if [ -t 1 ]; then COLOR=yes; else COLOR=no; fi
 fi
 
-TMPD="$(mktemp -d 2>/dev/null || echo $HOME/.obsidian/audit.$$)"
+TMPD="$(mktemp -d 2>/dev/null || echo /tmp/obsidian-audit.$$)"
 mkdir -p "$TMPD"
 trap 'rm -rf "$TMPD"' EXIT INT TERM
 

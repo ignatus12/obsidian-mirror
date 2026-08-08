@@ -1,8 +1,8 @@
 #!/bin/sh
 # =====================================================================
-#  obsidian-installer_v3.4.sh
+#  obsidian-installer_v3.5.sh
 #
-#  OBSIDIAN MIRROR v3.4 - Universal Host <-> Application Isolation Layer
+#  OBSIDIAN MIRROR v3.5 - A Universal Application Active-Response Privacy & Security Protection
 #  (three protection layers: metadata / hardware boundary / network)
 #
 #  One self-contained installer. No network access, no repository, no
@@ -58,7 +58,7 @@
 
 set -eu
 
-OBSIDIAN_VERSION="3.4"
+OBSIDIAN_VERSION="3.5"
 PREFIX="/opt/obsidian"
 BINDIR="$PREFIX/bin"
 LIBDIR="$PREFIX/lib"
@@ -120,7 +120,7 @@ cat <<'BANNER'
  \___/|_.__/|___/_|\__,_|_|\__,_|_| |_||_|  |_|_|_|  |_|  \___/|_|
 BANNER
 printf '%s' "$C_0"
-printf ' Universal Host <-> Application Isolation Layer   v%s  (three protection layers)\n' "$OBSIDIAN_VERSION"
+printf ' A Universal Application Active-Response Privacy & Security Protection v%s\n' "$OBSIDIAN_VERSION"
 printf ' Network layer intentionally out of scope.\n'
 
 # ---------------------------------------------------------------------

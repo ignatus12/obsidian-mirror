@@ -2035,6 +2035,9 @@ shift 1
 
 mount --make-rprivate / 2>/dev/null || true
 mount -t proc proc /proc
+HOMESTORE="/opt/obsidian/var/homes/$OBSIDIAN_APPKEY"
+mkdir -p "/opt/obsidian/var/homes" 2>/dev/null || true
+chmod 1777 "/opt/obsidian/var/homes" 2>/dev/null || true
 mount -t tmpfs tmpfs /home
 mkdir -p $HOMESTORE/.fake/sys_spoofs
 

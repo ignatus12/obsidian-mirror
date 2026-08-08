@@ -2372,10 +2372,13 @@ fi
 # context, because the inner stage runs unprivileged and cannot load it.
 export PATH="/usr/sbin:/sbin:$PATH"
 OBS_AA="$BINDIR/obsidian-apparmor.sh"
-if [ -x "$OBS_AA" ] && [ "$(id -u)" = "0" ] && command -v aa-exec >/dev/null 2>&1; then
+AA_EXEC="$(command -v aa-exec 2>/dev/null || true)"
+[ -z "$AA_EXEC" ] && [ -x /usr/sbin/aa-exec ] && AA_EXEC=/usr/sbin/aa-exec
+[ -z "$AA_EXEC" ] && [ -x /usr/bin/aa-exec ] && AA_EXEC=/usr/bin/aa-exec
+if [ -x "$OBS_AA" ] && [ "$(id -u)" = "0" ] && [ -n "$AA_EXEC" ]; then
     HW_FLAG=""; [ "$GPU_MODE" = strict ] && HW_FLAG="--enforce-hw"
     "$OBS_AA" load "$OBSIDIAN_APPKEY" "$HOME" $HW_FLAG >/dev/null 2>&1 || true
-    exec aa-exec -p "obsidian-$OBSIDIAN_APPKEY" -- unshare $UNS_ARGS "$INNER_STAGE" "$@"
+    exec "$AA_EXEC" -p "obsidian-$OBSIDIAN_APPKEY" -- unshare $UNS_ARGS "$INNER_STAGE" "$@"
 fi
 exec unshare $UNS_ARGS "$INNER_STAGE" "$@"
 ' -- "$REAL_UID" "$REAL_GID" "$FAKE_ROOT" "$PRELOAD" "$FAKE_USER" "$FAKE_HOSTNAME" \

@@ -5701,10 +5701,13 @@ fi
 # context, because the inner stage runs unprivileged and cannot load it.
 export PATH="/usr/sbin:/sbin:$PATH"
 OBS_AA="$BINDIR/obsidian-apparmor.sh"
-if [ -x "$OBS_AA" ] && [ "$(id -u)" = "0" ] && command -v aa-exec >/dev/null 2>&1; then
+AA_EXEC="$(command -v aa-exec 2>/dev/null || true)"
+[ -z "$AA_EXEC" ] && [ -x /usr/sbin/aa-exec ] && AA_EXEC=/usr/sbin/aa-exec
+[ -z "$AA_EXEC" ] && [ -x /usr/bin/aa-exec ] && AA_EXEC=/usr/bin/aa-exec
+if [ -x "$OBS_AA" ] && [ "$(id -u)" = "0" ] && [ -n "$AA_EXEC" ]; then
     HW_FLAG=""; [ "$GPU_MODE" = strict ] && HW_FLAG="--enforce-hw"
     "$OBS_AA" load "$OBSIDIAN_APPKEY" "$HOME" $HW_FLAG >/dev/null 2>&1 || true
-    exec aa-exec -p "obsidian-$OBSIDIAN_APPKEY" -- unshare $UNS_ARGS "$INNER_STAGE" "$@"
+    exec "$AA_EXEC" -p "obsidian-$OBSIDIAN_APPKEY" -- unshare $UNS_ARGS "$INNER_STAGE" "$@"
 fi
 exec unshare $UNS_ARGS "$INNER_STAGE" "$@"
 ' -- "$REAL_UID" "$REAL_GID" "$FAKE_ROOT" "$PRELOAD" "$FAKE_USER" "$FAKE_HOSTNAME" \
@@ -6944,6 +6947,9 @@ ok "bin/obsidian-netblock.sh"
 cat > "$BINDIR/obsidian-apparmor.sh" <<'OBSIDIAN_PAYLOAD_APPARMOR_SH'
 #!/bin/sh
 export PATH="/usr/sbin:/sbin:$PATH"
+APPARMOR_PARSER="$(command -v apparmor_parser 2>/dev/null || true)"
+[ -z "$APPARMOR_PARSER" ] && [ -x /usr/sbin/apparmor_parser ] && APPARMOR_PARSER=/usr/sbin/apparmor_parser
+[ -z "$APPARMOR_PARSER" ] && [ -x /usr/bin/apparmor_parser ] && APPARMOR_PARSER=/usr/bin/apparmor_parser
 # ===========================================================================
 # /opt/obsidian/bin/obsidian-apparmor.sh
 #
@@ -6972,7 +6978,7 @@ OBSIDIAN_DIR="${OBSIDIAN_DIR:-/opt/obsidian}"
 PROFDIR="/etc/apparmor.d"
 PROF_PREFIX="obsidian-"
 
-aa_present() { command -v apparmor_parser >/dev/null 2>&1; }
+aa_present() { [ -n "$APPARMOR_PARSER" ]; }
 
 profile_path() { echo "$PROFDIR/${PROF_PREFIX}$1"; }
 
@@ -7054,7 +7060,7 @@ EOF
         echo "obsidian-apparmor: apparmor_parser not installed; profile written but not loaded" >&2
         return 1
     fi
-    apparmor_parser -r "$prof" 2>&1 && echo "obsidian-apparmor: loaded profile ${PROF_PREFIX}${appkey}"
+    "$APPARMOR_PARSER" -r "$prof" 2>&1 && echo "obsidian-apparmor: loaded profile ${PROF_PREFIX}${appkey}"
 }
 
 # ---------------------------------------------------------------------------

@@ -1,5 +1,8 @@
 #!/bin/sh
 export PATH="/usr/sbin:/sbin:$PATH"
+APPARMOR_PARSER="$(command -v apparmor_parser 2>/dev/null || true)"
+[ -z "$APPARMOR_PARSER" ] && [ -x /usr/sbin/apparmor_parser ] && APPARMOR_PARSER=/usr/sbin/apparmor_parser
+[ -z "$APPARMOR_PARSER" ] && [ -x /usr/bin/apparmor_parser ] && APPARMOR_PARSER=/usr/bin/apparmor_parser
 # ===========================================================================
 # /opt/obsidian/bin/obsidian-apparmor.sh
 #
@@ -28,7 +31,7 @@ OBSIDIAN_DIR="${OBSIDIAN_DIR:-/opt/obsidian}"
 PROFDIR="/etc/apparmor.d"
 PROF_PREFIX="obsidian-"
 
-aa_present() { command -v apparmor_parser >/dev/null 2>&1; }
+aa_present() { [ -n "$APPARMOR_PARSER" ]; }
 
 profile_path() { echo "$PROFDIR/${PROF_PREFIX}$1"; }
 
@@ -110,7 +113,7 @@ EOF
         echo "obsidian-apparmor: apparmor_parser not installed; profile written but not loaded" >&2
         return 1
     fi
-    apparmor_parser -r "$prof" 2>&1 && echo "obsidian-apparmor: loaded profile ${PROF_PREFIX}${appkey}"
+    "$APPARMOR_PARSER" -r "$prof" 2>&1 && echo "obsidian-apparmor: loaded profile ${PROF_PREFIX}${appkey}"
 }
 
 # ---------------------------------------------------------------------------

@@ -208,8 +208,8 @@ for d in "$PREFIX" "$BINDIR" "$LIBDIR" "$SRCDIR" "$SCRIPTDIR" \
     mkdir -p "$d"
 done
 chmod 755 "$PREFIX" "$BINDIR" "$LIBDIR" "$SCRIPTDIR" "$FAKEROOT" "$MANIFESTDIR"
-mkdir -p "$OBSIDIAN_DIR/var/homes" 2>/dev/null
-chmod 1777 "$OBSIDIAN_DIR/var/homes" 2>/dev/null || true
+mkdir -p "/opt/obsidian/var/homes" 2>/dev/null
+chmod 1777 "/opt/obsidian/var/homes" 2>/dev/null || true
 ok "$PREFIX"
 ok "$MANIFESTDIR"
 

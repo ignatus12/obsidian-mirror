@@ -5682,9 +5682,9 @@ fi
 # capabilities the sandbox needs (mounts, netns setup, BPF-LSM attach).
 # Otherwise we map the real non-root user.
 if [ "$(id -u)" = "0" ]; then
-    UNS_ARGS="--user --map-root-user"
+    UNS_ARGS="--user --map-root-user --mount"
 else
-    UNS_ARGS="--user --map-user=1000 --map-group=1000"
+    UNS_ARGS="--user --map-user=1000 --map-group=1000 --mount"
 fi
 
 # v3.5 (AppArmor backend, Option C). When AppArmor + aa-exec are present and
@@ -5692,8 +5692,8 @@ fi
 # the app is kernel-confined (hardware denied, cannot read other users/root,
 # cannot read Obsidian internals). The profile is loaded here, in the root
 # context, because the inner stage runs unprivileged and cannot load it.
-OBS_AA="$(command -v obsidian-apparmor.sh 2>/dev/null)"
-if [ -n "$OBS_AA" ] && [ "$(id -u)" = "0" ] && command -v aa-exec >/dev/null 2>&1; then
+OBS_AA="$BINDIR/obsidian-apparmor.sh"
+if [ -x "$OBS_AA" ] && [ "$(id -u)" = "0" ] && command -v aa-exec >/dev/null 2>&1; then
     HW_FLAG=""; [ "$GPU_MODE" = strict ] && HW_FLAG="--enforce-hw"
     "$OBS_AA" load "$OBSIDIAN_APPKEY" "$HOME" $HW_FLAG >/dev/null 2>&1 || true
     exec aa-exec -p "obsidian-$OBSIDIAN_APPKEY" -- unshare $UNS_ARGS "$INNER_STAGE" "$@"

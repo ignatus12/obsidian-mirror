@@ -146,12 +146,15 @@ cmd_protect_src() {
     mode="${1:-on}"
     src="$OBSIDIAN_DIR/src"; bin="$OBSIDIAN_DIR/bin"
     if [ "$mode" = "on" ]; then
+        # Lock the SOURCE tree to root so a confined/unprivileged actor
+        # cannot read the implementation. The bin/ directory (the launcher
+        # and shared libs) MUST stay executable by users, so it is left 755.
         chmod 700 "$src" 2>/dev/null; chown root:root "$src" 2>/dev/null
-        chmod 700 "$bin" 2>/dev/null; chown root:root "$bin" 2>/dev/null
-        echo "obsidian-apparmor: source/bin set root-only (700)"
+        chmod 755 "$bin" 2>/dev/null
+        echo "obsidian-apparmor: source locked to root (700); bin left 755"
     else
         chmod 755 "$src" 2>/dev/null; chmod 755 "$bin" 2>/dev/null
-        echo "obsidian-apparmor: source/bin protection relaxed (755)"
+        echo "obsidian-apparmor: protection relaxed (755)"
     fi
 }
 

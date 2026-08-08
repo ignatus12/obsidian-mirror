@@ -7082,12 +7082,15 @@ cmd_protect_src() {
     mode="${1:-on}"
     src="$OBSIDIAN_DIR/src"; bin="$OBSIDIAN_DIR/bin"
     if [ "$mode" = "on" ]; then
+        # Lock the SOURCE tree to root so a confined/unprivileged actor
+        # cannot read the implementation. The bin/ directory (the launcher
+        # and shared libs) MUST stay executable by users, so it is left 755.
         chmod 700 "$src" 2>/dev/null; chown root:root "$src" 2>/dev/null
-        chmod 700 "$bin" 2>/dev/null; chown root:root "$bin" 2>/dev/null
-        echo "obsidian-apparmor: source/bin set root-only (700)"
+        chmod 755 "$bin" 2>/dev/null
+        echo "obsidian-apparmor: source locked to root (700); bin left 755"
     else
         chmod 755 "$src" 2>/dev/null; chmod 755 "$bin" 2>/dev/null
-        echo "obsidian-apparmor: source/bin protection relaxed (755)"
+        echo "obsidian-apparmor: protection relaxed (755)"
     fi
 }
 
@@ -8342,16 +8345,28 @@ else
 fi
 
 # v3.5 (AppArmor backend, Option C). If AppArmor userspace is present, lock
-# down the Obsidian source/bin so a confined app (and other actors) cannot read
-# the implementation. The per-app runtime profiles are loaded at launch.
+# down the Obsidian source so a confined app (and other actors) cannot read the
+# implementation. The bin/ directory stays executable (the launcher must run as
+# the unprivileged user). Per-app runtime profiles are loaded at launch.
+chmod 755 "$BINDIR" 2>/dev/null
 if command -v apparmor_parser >/dev/null 2>&1 && [ -x "$BINDIR/obsidian-apparmor.sh" ]; then
+    # Remove any stale profiles from an older Obsidian install that attach to
+    # the launcher path and would confine/deny the launch (e.g. a
+    # 'obsidian'/'obsidian-mirror' (complain) profile). Our profiles are
+    # named obsidian-<appkey> and do not collide by name.
+    for _old in obsidian obsidian-mirror obsidian-launch; do
+        if [ -f "/etc/apparmor.d/$_old" ]; then
+            apparmor_parser -R "/etc/apparmor.d/$_old" 2>/dev/null
+            rm -f "/etc/apparmor.d/$_old" 2>/dev/null
+        fi
+    done
     if "$BINDIR/obsidian-apparmor.sh" protect-src on 2>/dev/null; then
-        ok "obsidian-apparmor: source/bin locked to root (700)"
+        ok "obsidian-apparmor: source locked to root (700); bin left 755"
     else
         warn "obsidian-apparmor: protect-src failed; source not locked"
     fi
 else
-    warn "obsidian-apparmor: apparmor_parser not installed; source not locked. 'apk add apparmor-parser' for v3.5."
+    warn "obsidian-apparmor: apparmor_parser not installed; source not locked. 'apk add apparmor apparmor-utils' for v3.5."
 fi
 
 chmod 755 "$BINDIR/obsidian-launch" "$BINDIR/obsidian-inner" "$BINDIR/obsidian-audit"

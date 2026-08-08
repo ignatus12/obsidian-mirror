@@ -2293,22 +2293,22 @@ done
 
 # IPC and Wayland Socket Passthrough
 if [ -n "$REAL_RUNTIME_DIR" ] && [ -d "$REAL_RUNTIME_DIR" ]; then
-    mkdir -p /home/.real_socks
+    mkdir -p /tmp/obsidian/.real_socks
     for sock in "$WAYLAND_SOCK" pulse/native pipewire-0; do
         if [ -S "$REAL_RUNTIME_DIR/$sock" ]; then
-            mkdir -p "$(dirname "/home/.real_socks/$sock")"
-            touch "/home/.real_socks/$sock"
-            mount --bind "$REAL_RUNTIME_DIR/$sock" "/home/.real_socks/$sock"
+            mkdir -p "$(dirname "/tmp/obsidian/.real_socks/$sock")"
+            touch "/tmp/obsidian/.real_socks/$sock"
+            mount --bind "$REAL_RUNTIME_DIR/$sock" "/tmp/obsidian/.real_socks/$sock"
         fi
     done
 
     mount -t tmpfs tmpfs "$REAL_RUNTIME_DIR"
 
     for sock in "$WAYLAND_SOCK" pulse/native pipewire-0; do
-        if [ -S "/home/.real_socks/$sock" ]; then
+        if [ -S "/tmp/obsidian/.real_socks/$sock" ]; then
             mkdir -p "$(dirname "$REAL_RUNTIME_DIR/$sock")"
             touch "$REAL_RUNTIME_DIR/$sock"
-            mount --bind "/home/.real_socks/$sock" "$REAL_RUNTIME_DIR/$sock"
+            mount --bind "/tmp/obsidian/.real_socks/$sock" "$REAL_RUNTIME_DIR/$sock"
         fi
     done
 fi

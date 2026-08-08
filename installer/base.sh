@@ -3571,7 +3571,7 @@ else
     warn "obsidian-apparmor: apparmor_parser not installed; source not locked. 'apk add apparmor apparmor-utils' for v3.5."
 fi
 
-chmod 755 "$BINDIR/obsidian-launch" "$BINDIR/obsidian-inner" "$BINDIR/obsidian-audit"
+chmod 755 "$BINDIR/obsidian-launch" "$BINDIR/obsidian-inner" "$BINDIR/obsidian-audit" "$BINDIR/obsidian-apparmor.sh"
 chmod 755 "$SCRIPTDIR/generate-manifest.sh" "$SCRIPTDIR/obsidian-probe.sh"
 chmod 644 "$FAKEROOT/fonts/fonts.conf" "$PREFIX/COVERAGE.md"
 

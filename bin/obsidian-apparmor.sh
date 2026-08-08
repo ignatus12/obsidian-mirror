@@ -89,6 +89,7 @@ profile ${PROF_PREFIX}${appkey} (attach_disconnected) {
     /lib/** ixr,
     /lib64/** ixr,
     /opt/obsidian/** rmix,
+    /opt/obsidian/var/homes/** rwkl,
     $home/** rwkl,
 
     # read-only system config the app may need
